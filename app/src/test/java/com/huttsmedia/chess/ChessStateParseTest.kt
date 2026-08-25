@@ -85,4 +85,12 @@ class ChessStateParseTest {
         assertEquals(PieceColor.BLACK, ai.playerColor)
         assertEquals(AiDifficulty.GRANDMASTER, ai.difficulty)
     }
+
+    @Test
+    fun uciMapsToBoardCoordinates() {
+        val mv = uciToLastMove("e2e4")!!
+        assertEquals(Position(6, 4), mv.from)
+        assertEquals(Position(4, 4), mv.to)
+        assertEquals(null, uciToLastMove("zz"))
+    }
 }

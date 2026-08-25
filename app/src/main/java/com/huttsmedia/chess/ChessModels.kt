@@ -48,6 +48,10 @@ data class OpeningMove(
 
 enum class PieceStyle { STANDARD, HIGH_CONTRAST, FLAT }
 
+enum class BoardTheme {
+    GREEN, BLUE, BROWN, GRAY, WALNUT, ICE
+}
+
 data class HistoryEntry(
     val time: Long,
     val summary: String,

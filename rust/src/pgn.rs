@@ -150,4 +150,17 @@ mod tests {
         assert_eq!(g.ui_state().turn, "BLACK");
         assert!(g.ui_state().pieces[4][4].is_some());
     }
+
+    #[test]
+    fn strips_comments_and_variations() {
+        let g = import_pgn_or_fen(
+            r#"[Event "x"]
+1. e4 {comment} e5 (1... c5 2. Nf3) 2. Nf3 Nc6"#,
+            false,
+            true,
+            1,
+        )
+        .unwrap();
+        assert_eq!(g.ui_state().moves, vec!["e4", "e5", "Nf3", "Nc6"]);
+    }
 }

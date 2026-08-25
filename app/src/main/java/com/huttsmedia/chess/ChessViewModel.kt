@@ -67,6 +67,15 @@ class ChessViewModel(
             .getOrDefault(PieceStyle.STANDARD)
         set(value) { prefs.edit().putString(KEY_STYLE, value.name).apply() }
 
+    var boardTheme: BoardTheme
+        get() = runCatching { BoardTheme.valueOf(prefs.getString(KEY_BOARD, BoardTheme.GREEN.name)!!) }
+            .getOrDefault(BoardTheme.GREEN)
+        set(value) { prefs.edit().putString(KEY_BOARD, value.name).apply() }
+
+    var showOpeningNames: Boolean
+        get() = prefs.getBoolean(KEY_OPENING, true)
+        set(value) { prefs.edit().putBoolean(KEY_OPENING, value).apply() }
+
     init {
         if (_uiState.value.gameStarted) {
             restoreExistingGame()
@@ -291,7 +300,10 @@ class ChessViewModel(
     }
 
     fun onPlayUci(uci: String) {
-        if (!_uiState.value.gameStarted || _uiState.value.isAiThinking) return
+        val state = _uiState.value
+        if (!state.gameStarted || state.isAiThinking) return
+        val vsAi = state.gameMode as? GameMode.VsAI
+        if (vsAi != null && state.turn != vsAi.playerColor) return
         applyNative { ChessNative.playUci(uci) }
         maybeRequestAi()
         maybeResumeAnalysis()
@@ -526,6 +538,8 @@ class ChessViewModel(
         private const val KEY_COORDS = "coords"
         private const val KEY_ARROW = "arrow"
         private const val KEY_STYLE = "style"
+        private const val KEY_BOARD = "board_theme"
+        private const val KEY_OPENING = "opening_names"
         private const val KEY_CLOCK = "clock_ms"
         private const val KEY_HISTORY = "history"
     }

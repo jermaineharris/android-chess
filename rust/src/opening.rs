@@ -131,6 +131,10 @@ pub fn lookup(played: &[String]) -> OpeningInfo {
         let next = line.uci[played.len()];
         if let Some(existing) = children.iter_mut().find(|c| c.uci == next) {
             existing.lines += 1;
+            if line.uci.len() == played.len() + 1 {
+                existing.eco = line.eco.to_string();
+                existing.name = line.name.to_string();
+            }
             continue;
         }
         let Some(pos) = replay(&line.uci[..played.len()]) else {
@@ -168,6 +172,9 @@ mod tests {
     fn sicilian_after_e4() {
         let info = lookup(&["e2e4".to_string()]);
         assert!(info.children.iter().any(|c| c.uci == "c7c5"));
+        let e4 = lookup(&[]).children.into_iter().find(|c| c.uci == "e2e4").unwrap();
+        assert_eq!(e4.name, "King's Pawn");
+        assert_eq!(e4.eco, "B00");
     }
 
     #[test]

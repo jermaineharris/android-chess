@@ -388,7 +388,7 @@ fun ChessGame(
             Spacer(modifier = Modifier.height(8.dp))
             Text(turnLabel, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
             Text("Material $materialLabel", fontSize = 14.sp)
-            uiState.opening?.let { name ->
+            uiState.opening?.takeIf { viewModel.showOpeningNames }?.let { name ->
                 Text(
                     listOfNotNull(uiState.eco, name).joinToString(" · "),
                     fontSize = 13.sp
@@ -431,9 +431,14 @@ fun ChessGame(
                 showCoordinates = viewModel.showCoordinates,
                 showArrow = viewModel.showArrow,
                 pieceStyle = viewModel.pieceStyle,
+                boardTheme = viewModel.boardTheme,
                 settingsTick = settingsTick
             )
-            if (uiState.openingMoves.isNotEmpty()) {
+            val humanToMove = when (val mode = uiState.gameMode) {
+                is GameMode.VsAI -> uiState.turn == mode.playerColor && !uiState.isAiThinking
+                else -> !uiState.isAiThinking
+            }
+            if (viewModel.showOpeningNames && uiState.openingMoves.isNotEmpty() && humanToMove) {
                 Spacer(modifier = Modifier.height(8.dp))
                 OpeningTree(uiState.openingMoves, onPick = viewModel::onPlayUci)
             }
@@ -689,10 +694,12 @@ fun ChessBoard(
     showCoordinates: Boolean = true,
     showArrow: Boolean = true,
     pieceStyle: PieceStyle = PieceStyle.STANDARD,
+    boardTheme: BoardTheme = BoardTheme.GREEN,
     settingsTick: Int = 0
 ) {
     val flipped = uiState.isBoardFlipped
     val lastMove = uiState.lastMove
+    val (lightSq, darkSq, lastSq) = boardTheme.squareColors()
     @Suppress("UNUSED_VARIABLE")
     val tick = settingsTick
     Column(Modifier.fillMaxWidth()) {
@@ -731,14 +738,14 @@ fun ChessBoard(
                             val isHint = uiState.hint?.from == pos || uiState.hint?.to == pos
                             val isKingCheck =
                                 uiState.kingInCheck && piece?.type == PieceType.KING && piece.color == uiState.turn
-                            val base = if ((logicalRow + logicalCol) % 2 == 0) Color(0xFFEEEED2) else Color(0xFF769656)
+                            val base = if ((logicalRow + logicalCol) % 2 == 0) lightSq else darkSq
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .aspectRatio(1f)
                                     .background(
                                         when {
-                                            isLast -> Color(0xFFBACA2B)
+                                            isLast -> lastSq
                                             isHint -> Color(0xFF7EC8E3)
                                             else -> base
                                         }
@@ -874,25 +881,41 @@ fun formatClock(ms: Long): String {
     return "%d:%02d".format(total / 60, total % 60)
 }
 
+private fun BoardTheme.squareColors(): Triple<Color, Color, Color> = when (this) {
+    BoardTheme.GREEN -> Triple(Color(0xFFEEEED2), Color(0xFF769656), Color(0xFFBACA2B))
+    BoardTheme.BLUE -> Triple(Color(0xFFDEE3E6), Color(0xFF4B7399), Color(0xFF8CA2C0))
+    BoardTheme.BROWN -> Triple(Color(0xFFF0D9B5), Color(0xFFB58863), Color(0xFFCDD26A))
+    BoardTheme.GRAY -> Triple(Color(0xFFEAEAEA), Color(0xFF7A7A7A), Color(0xFFB8B8B8))
+    BoardTheme.WALNUT -> Triple(Color(0xFFE8D0B0), Color(0xFF6B3F24), Color(0xFFC4A35A))
+    BoardTheme.ICE -> Triple(Color(0xFFF3F8FC), Color(0xFF5B8FB9), Color(0xFF7EC8E3))
+}
+
 @Composable
 fun SettingsDialog(viewModel: ChessViewModel, onDismiss: () -> Unit) {
     var sound by remember { mutableStateOf(viewModel.soundEnabled) }
     var haptics by remember { mutableStateOf(viewModel.hapticsEnabled) }
     var coords by remember { mutableStateOf(viewModel.showCoordinates) }
     var arrow by remember { mutableStateOf(viewModel.showArrow) }
+    var openingNames by remember { mutableStateOf(viewModel.showOpeningNames) }
     var style by remember { mutableStateOf(viewModel.pieceStyle) }
+    var board by remember { mutableStateOf(viewModel.boardTheme) }
+    fun save() {
+        viewModel.soundEnabled = sound
+        viewModel.hapticsEnabled = haptics
+        viewModel.showCoordinates = coords
+        viewModel.showArrow = arrow
+        viewModel.showOpeningNames = openingNames
+        viewModel.pieceStyle = style
+        viewModel.boardTheme = board
+    }
     AlertDialog(
         onDismissRequest = {
-            viewModel.soundEnabled = sound
-            viewModel.hapticsEnabled = haptics
-            viewModel.showCoordinates = coords
-            viewModel.showArrow = arrow
-            viewModel.pieceStyle = style
+            save()
             onDismiss()
         },
         title = { Text("Settings") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                     Text("Move sounds")
                     Switch(checked = sound, onCheckedChange = { sound = it })
@@ -909,6 +932,10 @@ fun SettingsDialog(viewModel: ChessViewModel, onDismiss: () -> Unit) {
                     Text("Last-move arrow")
                     Switch(checked = arrow, onCheckedChange = { arrow = it })
                 }
+                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                    Text("Opening names")
+                    Switch(checked = openingNames, onCheckedChange = { openingNames = it })
+                }
                 Spacer(Modifier.height(8.dp))
                 Text("Pieces")
                 SingleChoiceSegmentedButtonRow {
@@ -921,6 +948,46 @@ fun SettingsDialog(viewModel: ChessViewModel, onDismiss: () -> Unit) {
                         )
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+                Text("Board colors")
+                Spacer(Modifier.height(6.dp))
+                BoardTheme.entries.chunked(3).forEach { row ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        row.forEach { theme ->
+                            val (light, dark, _) = theme.squareColors()
+                            Column(
+                                Modifier
+                                    .weight(1f)
+                                    .clickable { board = theme }
+                                    .border(
+                                        width = if (board == theme) 2.dp else 1.dp,
+                                        color = if (board == theme) MaterialTheme.colorScheme.primary else Color.Gray
+                                    )
+                                    .padding(4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Row(Modifier.fillMaxWidth().height(22.dp)) {
+                                    Box(Modifier.weight(1f).fillMaxHeight().background(light))
+                                    Box(Modifier.weight(1f).fillMaxHeight().background(dark))
+                                }
+                                Text(
+                                    when (theme) {
+                                        BoardTheme.GREEN -> "Green"
+                                        BoardTheme.BLUE -> "Blue"
+                                        BoardTheme.BROWN -> "Brown"
+                                        BoardTheme.GRAY -> "Gray"
+                                        BoardTheme.WALNUT -> "Walnut"
+                                        BoardTheme.ICE -> "Ice"
+                                    },
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Engine is Stockfish 17.1 (NNUE), GPL-3.0, run as a separate process.",
@@ -930,11 +997,7 @@ fun SettingsDialog(viewModel: ChessViewModel, onDismiss: () -> Unit) {
         },
         confirmButton = {
             TextButton(onClick = {
-                viewModel.soundEnabled = sound
-                viewModel.hapticsEnabled = haptics
-                viewModel.showCoordinates = coords
-                viewModel.showArrow = arrow
-                viewModel.pieceStyle = style
+                save()
                 onDismiss()
             }) { Text("Done") }
         }
