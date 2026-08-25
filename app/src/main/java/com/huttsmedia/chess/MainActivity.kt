@@ -47,13 +47,23 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -237,6 +247,7 @@ fun NewGameDialog(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChessGame(
     viewModel: ChessViewModel,
@@ -254,6 +265,7 @@ fun ChessGame(
     var showSettings by remember { mutableStateOf(false) }
     var showImport by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     var settingsTick by remember { mutableStateOf(0) }
     val promotionColor = uiState.promotionColor
 
@@ -378,8 +390,79 @@ fun ChessGame(
         else -> "even"
     }
 
+    fun requestNewGame() {
+        val inProgress = uiState.gameStarted && !uiState.gameOver && uiState.moves.isNotEmpty()
+        if (inProgress) confirmNewGame = true else showNewGameDialog = true
+    }
+    fun sharePgn() {
+        val pgn = uiState.pgn.ifBlank { "*" }
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, pgn)
+        }
+        context.startActivity(Intent.createChooser(send, "Share PGN"))
+    }
+
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            TopAppBar(
+                title = { Text("Hutts Chess") },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    actionIconContentColor = MaterialTheme.colorScheme.onSurface
+                ),
+                actions = {
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    }
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "Menu")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("New game") },
+                            onClick = {
+                                menuOpen = false
+                                requestNewGame()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Import PGN") },
+                            onClick = {
+                                menuOpen = false
+                                showImport = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("History") },
+                            onClick = {
+                                menuOpen = false
+                                showHistory = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Share PGN") },
+                            enabled = uiState.gameStarted,
+                            onClick = {
+                                menuOpen = false
+                                sharePgn()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            onClick = {
+                                menuOpen = false
+                                showSettings = true
+                            }
+                        )
+                    }
+                    }
+                }
+            )
+        }
     ) { innerPadding ->
         Column(
             Modifier
@@ -511,40 +594,6 @@ fun ChessGame(
                 ) {
                     Text("Resign")
                 }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
-            ) {
-                Button(onClick = {
-                    val inProgress = uiState.gameStarted && !uiState.gameOver && uiState.moves.isNotEmpty()
-                    if (inProgress) confirmNewGame = true else showNewGameDialog = true
-                }) {
-                    Text("New Game")
-                }
-                OutlinedButton(
-                    onClick = {
-                        val pgn = uiState.pgn.ifBlank { "*" }
-                        val send = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, pgn)
-                        }
-                        context.startActivity(Intent.createChooser(send, "Share PGN"))
-                    },
-                    enabled = uiState.gameStarted
-                ) {
-                    Text("Share PGN")
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
-            ) {
-                OutlinedButton(onClick = { showImport = true }) { Text("Import") }
-                OutlinedButton(onClick = { showHistory = true }) { Text("History") }
-                OutlinedButton(onClick = { showSettings = true }) { Text("Settings") }
             }
 
             if (!uiState.gameOver) {
