@@ -173,7 +173,13 @@ fun NewGameDialog(
                     }
                 }
             },
-            confirmButton = { }
+            confirmButton = {
+                if (dismissable) {
+                    TextButton(onClick = {
+                        showSettings = null
+                    }) { Text("Back") }
+                }
+            }
         )
     } ?: AlertDialog(
         onDismissRequest = { if (dismissable) onDismiss() },
@@ -220,10 +226,16 @@ fun ChessGame(
         viewModel.onDeselect()
     }
 
+    var hapticReady by remember { mutableStateOf(false) }
     LaunchedEffect(uiState.moves.size, uiState.lastEvent, uiState.gameOver) {
+        if (!hapticReady) {
+            hapticReady = true
+            return@LaunchedEffect
+        }
         val feedback = when (uiState.lastEvent) {
             "capture" -> HapticFeedbackConstants.LONG_PRESS
             "check", "mate", "resign" -> HapticFeedbackConstants.REJECT
+            "draw" -> HapticFeedbackConstants.CONFIRM
             "move" -> HapticFeedbackConstants.CLOCK_TICK
             else -> return@LaunchedEffect
         }
@@ -546,14 +558,33 @@ fun ChessBoard(
 
 @Composable
 fun ChessPiece(piece: Piece, size: Dp? = null) {
-    Image(
-        painterResource(id = piece.type.resID),
-        "${piece.color} ${piece.type}",
-        (if (size != null) Modifier.size(size) else Modifier.fillMaxSize())
-            .padding(2.dp),
-        colorFilter = ColorFilter.tint(
-            if (piece.color == PieceColor.WHITE) Color(0xFFF0F0F0) else Color(0xFF1A1A1A)
+    val base = if (size != null) Modifier.size(size) else Modifier.fillMaxSize()
+    if (piece.color == PieceColor.WHITE) {
+        Box(base, contentAlignment = Alignment.Center) {
+            Image(
+                painterResource(id = piece.type.resID),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(1.dp),
+                colorFilter = ColorFilter.tint(Color(0xFF3D3D3D))
+            )
+            Image(
+                painterResource(id = piece.type.resID),
+                "${piece.color} ${piece.type}",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(3.dp),
+                colorFilter = ColorFilter.tint(Color(0xFFF7F7F7))
+            )
+        }
+    } else {
+        Image(
+            painterResource(id = piece.type.resID),
+            "${piece.color} ${piece.type}",
+            base.padding(2.dp),
+            colorFilter = ColorFilter.tint(Color(0xFF1A1A1A))
         )
-    )
+    }
 }
 

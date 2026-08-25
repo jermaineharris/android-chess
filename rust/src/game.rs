@@ -1,4 +1,5 @@
 use serde::Serialize;
+use shakmaty::fen::Fen;
 use shakmaty::san::SanPlus;
 use shakmaty::zobrist::{Zobrist64, ZobristHash};
 use shakmaty::{
@@ -486,8 +487,28 @@ impl Game {
         if self.flipped { -score } else { score }
     }
 
+    fn pgn_result(&self) -> &'static str {
+        if let Some(loser) = self.resigned {
+            return if loser == Color::White { "0-1" } else { "1-0" };
+        }
+        if self.pos.is_checkmate() {
+            return if self.pos.turn() == Color::White {
+                "0-1"
+            } else {
+                "1-0"
+            };
+        }
+        if self.is_game_over() {
+            return "1/2-1/2";
+        }
+        "*"
+    }
+
     fn pgn(&self) -> String {
-        let mut out = String::from("[Event \"Hutts Chess\"]\n[Site \"Android\"]\n\n");
+        let result = self.pgn_result();
+        let mut out = format!(
+            "[Event \"Hutts Chess\"]\n[Site \"Android\"]\n[Result \"{result}\"]\n\n"
+        );
         for (i, chunk) in self.moves.chunks(2).enumerate() {
             out.push_str(&format!("{}. {}", i + 1, chunk[0]));
             if chunk.len() == 2 {
@@ -496,6 +517,7 @@ impl Game {
             }
             out.push(' ');
         }
+        out.push_str(result);
         out.trim().to_string()
     }
 
@@ -531,8 +553,11 @@ impl Game {
             "playAsWhite": self.player_color == Color::White,
             "difficulty": self.difficulty,
             "flipped": self.flipped,
+            "fen": Fen::from_position(self.pos.clone(), EnPassantMode::Legal).to_string(),
             "uci": self.uci_moves,
             "resigned": self.resigned.map(color_name),
+            "pendingFrom": self.pending_promotion.map(|(from, _)| from.to_string()),
+            "pendingTo": self.pending_promotion.map(|(_, to)| to.to_string()),
         })
         .to_string()
     }
@@ -546,20 +571,51 @@ impl Game {
         if let Some(flipped) = v.get("flipped").and_then(|x| x.as_bool()) {
             game.flipped = flipped;
         }
+        let mut replayed = 0usize;
         if let Some(arr) = v.get("uci").and_then(|x| x.as_array()) {
             for uci in arr {
                 let Some(s) = uci.as_str() else { continue };
                 if !game.play_uci_for_tests(s) {
                     return Err(format!("illegal uci {s}"));
                 }
+                replayed += 1;
             }
         }
-        if let Some(name) = v.get("resigned").and_then(|x| x.as_str()) {
-            game.resigned = match name {
-                "WHITE" => Some(Color::White),
-                "BLACK" => Some(Color::Black),
-                _ => None,
-            };
+        if replayed == 0 {
+            if let Some(fen) = v.get("fen").and_then(|x| x.as_str()) {
+                game.pos = fen
+                    .parse::<Fen>()
+                    .map_err(|e| e.to_string())?
+                    .into_position(CastlingMode::Standard)
+                    .map_err(|e| e.to_string())?;
+                game.position_hashes = vec![hash_pos(&game.pos)];
+            }
+        }
+        let resigned = match v.get("resigned").and_then(|x| x.as_str()) {
+            Some("WHITE") => Some(Color::White),
+            Some("BLACK") => Some(Color::Black),
+            _ => None,
+        };
+        if let Some(loser) = resigned {
+            game.undo_stack.push(game.snapshot());
+            game.resigned = Some(loser);
+        }
+        if game.resigned.is_none() {
+            let from = v.get("pendingFrom").and_then(|x| x.as_str());
+            let to = v.get("pendingTo").and_then(|x| x.as_str());
+            if let (Some(from), Some(to)) = (from, to) {
+                let from_sq: Square = from
+                    .parse()
+                    .map_err(|_| format!("bad pendingFrom {from}"))?;
+                let to_sq: Square = to.parse().map_err(|_| format!("bad pendingTo {to}"))?;
+                let legal = game.pos.legal_moves().into_iter().any(|m| {
+                    let (f, t) = move_from_to(&m);
+                    f == from_sq && t == to_sq && m.promotion().is_some()
+                });
+                if legal {
+                    game.pending_promotion = Some((from_sq, to_sq));
+                }
+            }
         }
         game.last_event = "none".to_string();
         Ok(game)
@@ -767,5 +823,59 @@ mod tests {
         assert!(g.play_uci_for_tests("e4d5"));
         assert_eq!(g.ui_state().last_event, "capture");
         assert_eq!(g.ui_state().material, 1);
+    }
+
+    #[test]
+    fn undo_resign_restores_play() {
+        let mut g = Game::new(false, true, 1);
+        assert!(g.play_uci_for_tests("e2e4"));
+        g.resign();
+        assert!(g.is_game_over());
+        g.undo();
+        assert!(!g.is_game_over());
+        assert_eq!(g.ui_state().turn, "BLACK");
+        assert!(g.ui_state().pgn.contains("1. e4 *"));
+    }
+
+    #[test]
+    fn resume_resign_then_undo_keeps_last_move() {
+        let mut g = Game::new(false, true, 1);
+        assert!(g.play_uci_for_tests("e2e4"));
+        g.resign();
+        let mut loaded = Game::import_save(&g.export_save()).unwrap();
+        assert!(loaded.is_game_over());
+        loaded.undo();
+        assert!(!loaded.is_game_over());
+        assert_eq!(loaded.moves, vec!["e4"]);
+        assert_eq!(loaded.ui_state().turn, "BLACK");
+    }
+
+    #[test]
+    fn save_keeps_pending_promotion() {
+        let mut g = Game::new(false, true, 1);
+        g.pos = "8/P7/8/8/8/8/8/K6k w - - 0 1"
+            .parse::<shakmaty::fen::Fen>()
+            .unwrap()
+            .into_position(shakmaty::CastlingMode::Standard)
+            .unwrap();
+        g.position_hashes = vec![hash_pos(&g.pos)];
+        g.click(1, 0);
+        g.click(0, 0);
+        assert!(g.pending_promotion.is_some());
+        let mut loaded = Game::import_save(&g.export_save()).unwrap();
+        assert!(loaded.pending_promotion.is_some());
+        loaded.promote("QUEEN");
+        assert_eq!(loaded.ui_state().pieces[0][0].as_ref().unwrap().kind, "QUEEN");
+    }
+
+    #[test]
+    fn checkmate_pgn_has_result() {
+        let mut g = Game::new(false, true, 1);
+        for uci in ["e2e4", "e7e5", "d1h5", "b8c6", "f1c4", "g8f6", "h5f7"] {
+            assert!(g.play_uci_for_tests(uci));
+        }
+        let pgn = g.ui_state().pgn;
+        assert!(pgn.contains("[Result \"1-0\"]"), "{pgn}");
+        assert!(pgn.ends_with("1-0"), "{pgn}");
     }
 }

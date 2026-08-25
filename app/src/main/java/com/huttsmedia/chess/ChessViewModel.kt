@@ -108,8 +108,12 @@ class ChessViewModel(
 
     private fun restoreExistingGame() {
         val mode = storedMode()
-        val native = ChessNative.getState()
-        if (!JSONObject(native).has("error")) {
+        val native = runCatching { ChessNative.getState() }.getOrElse {
+            clearStarted()
+            return
+        }
+        val nativeObj = runCatching { JSONObject(native) }.getOrNull()
+        if (nativeObj != null && !nativeObj.has("error")) {
             applyState(native, mode, thinking = false)
             maybeRequestAi()
             return
@@ -119,12 +123,15 @@ class ChessViewModel(
             clearStarted()
             return
         }
-        val restored = ChessNative.importSave(save)
-        if (JSONObject(restored).has("error")) {
+        val restored = runCatching { ChessNative.importSave(save) }.getOrElse {
             clearStarted()
             return
         }
-        applyState(restored, parseSavedGameMode(save), thinking = false)
+        if (runCatching { JSONObject(restored).has("error") }.getOrDefault(true)) {
+            clearStarted()
+            return
+        }
+        applyState(restored, runCatching { parseSavedGameMode(save) }.getOrDefault(mode), thinking = false)
         maybeRequestAi()
     }
 
@@ -165,7 +172,7 @@ class ChessViewModel(
     private fun persistSave() {
         if (!_uiState.value.gameStarted) return
         val save = ChessNative.exportSave()
-        if (JSONObject(save).has("error")) return
+        if (runCatching { JSONObject(save).has("error") }.getOrDefault(true)) return
         prefs.edit()
             .putString(KEY_SAVE, save)
             .putBoolean(KEY_STARTED, true)
