@@ -25,8 +25,13 @@ pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_newGame<'local>(
     vs_ai: jboolean,
     play_as_white: jboolean,
     difficulty: i32,
+    analysis: jboolean,
 ) -> jni::sys::jstring {
-    let game = Game::new(vs_ai != 0, play_as_white != 0, difficulty.clamp(0, 3) as u8);
+    let game = if analysis != 0 {
+        Game::analysis_board()
+    } else {
+        Game::new(vs_ai != 0, play_as_white != 0, difficulty.clamp(0, 3) as u8)
+    };
     let json = game.to_json();
     *GAME.lock().expect("game mutex") = Some(game);
     _env.new_string(json)
@@ -161,4 +166,135 @@ pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_importSave<'local>(
     env.new_string(json)
         .expect("string")
         .into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_redo<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.redo());
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_hint<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.hint());
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_offerDraw<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.offer_draw());
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_acceptDraw<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.accept_draw());
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_declineDraw<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.decline_draw());
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_claimDraw<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.claim_draw());
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_flagLoss<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    white_lost: jboolean,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.flag(white_lost != 0));
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_importText<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    text: JString<'local>,
+    vs_ai: jboolean,
+    play_as_white: jboolean,
+    difficulty: i32,
+    analysis: jboolean,
+) -> jni::sys::jstring {
+    let raw: String = env.get_string(&text).expect("text").into();
+    let json = match Game::import_text(
+        &raw,
+        vs_ai != 0,
+        play_as_white != 0,
+        difficulty.clamp(0, 3) as u8,
+        analysis != 0,
+    ) {
+        Ok(game) => {
+            let out = game.to_json();
+            *GAME.lock().expect("game mutex") = Some(game);
+            out
+        }
+        Err(err) => serde_json::json!({ "error": err }).to_string(),
+    };
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_playUci<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    uci: JString<'local>,
+) -> jni::sys::jstring {
+    let raw: String = env.get_string(&uci).expect("uci").into();
+    let json = with_game(|g| {
+        g.play_uci(&raw);
+    });
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_gotoPly<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    ply: i32,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.goto_ply(ply));
+    env.new_string(json).expect("string").into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_analyze<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    depth: i32,
+) -> jni::sys::jstring {
+    let json = {
+        let guard = GAME.lock().expect("game mutex");
+        match guard.as_ref() {
+            Some(game) => game.rust_analyze(depth.clamp(1, 5) as u8),
+            None => serde_json::json!({ "error": "no game" }).to_string(),
+        }
+    };
+    env.new_string(json).expect("string").into_raw()
 }

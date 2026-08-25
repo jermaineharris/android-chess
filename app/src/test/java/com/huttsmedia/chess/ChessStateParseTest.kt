@@ -43,6 +43,28 @@ class ChessStateParseTest {
     }
 
     @Test
+    fun parsesOpeningTreeAndAnalysisFlag() {
+        val json = """
+            {
+              "pieces": [[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null],[null,null,null,null,null,null,null,null]],
+              "moves": ["e4"],
+              "turn": "BLACK",
+              "analysis": true,
+              "eco": "B00",
+              "opening": "King's Pawn",
+              "openingMoves": [{"san":"c5","uci":"c7c5","eco":"B20","name":"Sicilian Defense","lines":4}],
+              "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
+              "ply": 1
+            }
+        """.trimIndent()
+        val state = parseChessState(json, GameMode.Analysis, gameStarted = true, isAiThinking = false)
+        assertEquals(true, state.analysis)
+        assertEquals("B00", state.eco)
+        assertEquals("Sicilian Defense", state.openingMoves[0].name)
+        assertEquals(GameMode.Analysis, parseSavedGameMode("""{"analysis":true}"""))
+    }
+
+    @Test
     fun parsesSaveModeAndEvents() {
         val json = """
             {

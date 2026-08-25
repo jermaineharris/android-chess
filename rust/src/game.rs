@@ -7,12 +7,14 @@ use shakmaty::{
     Square,
 };
 
-use crate::search::choose_move;
+use crate::opening;
+use crate::search::{analyze_pv, best_move, choose_move, depth_for_difficulty, evaluate};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GameMode {
     TwoPlayer,
     VsAi,
+    Analysis,
 }
 
 #[derive(Serialize, Clone)]
@@ -54,6 +56,27 @@ pub struct UiState {
     pub material: i32,
     #[serde(rename = "lastEvent")]
     pub last_event: String,
+    #[serde(rename = "canRedo")]
+    pub can_redo: bool,
+    #[serde(rename = "canClaimDraw")]
+    pub can_claim_draw: bool,
+    #[serde(rename = "canOfferDraw")]
+    pub can_offer_draw: bool,
+    #[serde(rename = "drawOfferPending")]
+    pub draw_offer_pending: bool,
+    #[serde(rename = "drawOfferBy")]
+    pub draw_offer_by: Option<String>,
+    #[serde(rename = "hintsLeft")]
+    pub hints_left: i32,
+    pub hint: Option<[u8; 4]>,
+    pub halfmoves: u32,
+    pub fen: String,
+    pub ply: u32,
+    pub analysis: bool,
+    pub eco: Option<String>,
+    pub opening: Option<String>,
+    #[serde(rename = "openingMoves")]
+    pub opening_moves: Vec<opening::OpeningChild>,
 }
 
 #[derive(Clone)]
@@ -66,6 +89,9 @@ struct Snapshot {
     position_hashes: Vec<u64>,
     uci_moves: Vec<String>,
     resigned: Option<Color>,
+    draw_agreed: bool,
+    flagged: Option<Color>,
+    pending_draw_offer: Option<Color>,
 }
 
 pub struct Game {
@@ -82,9 +108,16 @@ pub struct Game {
     last_move: Option<(Square, Square)>,
     position_hashes: Vec<u64>,
     undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
     uci_moves: Vec<String>,
     resigned: Option<Color>,
     last_event: String,
+    draw_agreed: bool,
+    flagged: Option<Color>,
+    pending_draw_offer: Option<Color>,
+    hints_used: u8,
+    hint: Option<(Square, Square)>,
+    start_fen: String,
 }
 
 fn role_name(role: Role) -> &'static str {
@@ -164,6 +197,7 @@ impl Game {
         } else {
             Color::Black
         };
+        let start_fen = Fen::from_position(pos.clone(), EnPassantMode::Legal).to_string();
         Self {
             position_hashes: vec![hash_pos(&pos)],
             pos,
@@ -182,10 +216,23 @@ impl Game {
             pending_promotion: None,
             last_move: None,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             uci_moves: Vec::new(),
             resigned: None,
             last_event: "none".to_string(),
+            draw_agreed: false,
+            flagged: None,
+            pending_draw_offer: None,
+            hints_used: 0,
+            hint: None,
+            start_fen,
         }
+    }
+
+    pub fn analysis_board() -> Self {
+        let mut game = Self::new(false, true, 1);
+        game.mode = GameMode::Analysis;
+        game
     }
 
     pub fn is_ai_turn(&self) -> bool {
@@ -205,6 +252,9 @@ impl Game {
             position_hashes: self.position_hashes.clone(),
             uci_moves: self.uci_moves.clone(),
             resigned: self.resigned,
+            draw_agreed: self.draw_agreed,
+            flagged: self.flagged,
+            pending_draw_offer: self.pending_draw_offer,
         }
     }
 
@@ -219,6 +269,10 @@ impl Game {
         self.position_hashes = snap.position_hashes;
         self.uci_moves = snap.uci_moves;
         self.resigned = snap.resigned;
+        self.draw_agreed = snap.draw_agreed;
+        self.flagged = snap.flagged;
+        self.pending_draw_offer = snap.pending_draw_offer;
+        self.hint = None;
         self.last_event = "none".to_string();
     }
 
@@ -317,6 +371,7 @@ impl Game {
         if self.undo_stack.is_empty() {
             return;
         }
+        let current = self.snapshot();
         let snap = self.undo_stack.pop().unwrap();
         self.restore(snap);
         if self.mode == GameMode::VsAi
@@ -326,10 +381,22 @@ impl Game {
             let snap = self.undo_stack.pop().unwrap();
             self.restore(snap);
         }
+        self.redo_stack.push(current);
+    }
+
+    pub fn redo(&mut self) {
+        let Some(snap) = self.redo_stack.pop() else {
+            return;
+        };
+        self.undo_stack.push(self.snapshot());
+        self.restore(snap);
     }
 
     fn play_move(&mut self, m: Move) {
         self.undo_stack.push(self.snapshot());
+        self.redo_stack.clear();
+        self.pending_draw_offer = None;
+        self.hint = None;
         let captured = m.capture().is_some();
         if let Some(role) = m.capture() {
             let captured_color = !self.pos.turn();
@@ -373,13 +440,41 @@ impl Game {
             >= 3
     }
 
+    fn is_twofold(&self) -> bool {
+        let Some(&current) = self.position_hashes.last() else {
+            return false;
+        };
+        self.position_hashes
+            .iter()
+            .filter(|h| **h == current)
+            .count()
+            >= 2
+    }
+
     pub fn is_game_over(&self) -> bool {
         self.resigned.is_some()
+            || self.draw_agreed
+            || self.flagged.is_some()
             || self.pos.is_checkmate()
             || self.pos.is_stalemate()
             || self.pos.is_insufficient_material()
             || self.pos.halfmoves() >= 100
             || self.is_threefold()
+    }
+
+    fn can_claim_draw(&self) -> bool {
+        !self.is_game_over() && (self.pos.halfmoves() >= 80 || self.is_twofold())
+    }
+
+    fn hints_left(&self) -> i32 {
+        if self.mode == GameMode::Analysis {
+            return 99;
+        }
+        if self.difficulty == 0 {
+            (3i32 - i32::from(self.hints_used)).max(0)
+        } else {
+            99
+        }
     }
 
     fn legal_dests(&self) -> Vec<[u8; 2]> {
@@ -404,6 +499,13 @@ impl Game {
     }
 
     fn status_text(&self) -> Option<String> {
+        if let Some(loser) = self.flagged {
+            let winner = if loser == Color::White { "Black" } else { "White" };
+            return Some(format!("{winner} wins on time."));
+        }
+        if self.draw_agreed {
+            return Some("Draw by agreement.".to_string());
+        }
         if let Some(loser) = self.resigned {
             let winner = if loser == Color::White { "Black" } else { "White" };
             return Some(format!("{winner} wins by resignation."));
@@ -428,6 +530,10 @@ impl Game {
         if self.is_threefold() {
             return Some("Draw by threefold repetition.".to_string());
         }
+        if let Some(by) = self.pending_draw_offer {
+            let name = if by == Color::White { "White" } else { "Black" };
+            return Some(format!("{name} offers a draw."));
+        }
         if self.pos.is_check() {
             return Some("Check!".to_string());
         }
@@ -446,6 +552,7 @@ impl Game {
             let (tr, tc) = rc_from_square(to);
             [fr, fc, tr, tc]
         });
+        let opening = opening::lookup(&self.uci_moves);
         let game_over = self.is_game_over();
         UiState {
             pieces,
@@ -468,6 +575,27 @@ impl Game {
             pgn: self.pgn(),
             material: self.material_score(),
             last_event: self.last_event.clone(),
+            can_redo: !self.redo_stack.is_empty(),
+            can_claim_draw: self.can_claim_draw(),
+            can_offer_draw: self.mode != GameMode::Analysis
+                && !self.is_game_over()
+                && self.pending_promotion.is_none()
+                && self.pending_draw_offer.is_none(),
+            draw_offer_pending: self.pending_draw_offer.is_some(),
+            draw_offer_by: self.pending_draw_offer.map(color_name).map(str::to_string),
+            hints_left: self.hints_left(),
+            hint: self.hint.map(|(from, to)| {
+                let (fr, fc) = rc_from_square(from);
+                let (tr, tc) = rc_from_square(to);
+                [fr, fc, tr, tc]
+            }),
+            halfmoves: self.pos.halfmoves(),
+            fen: Fen::from_position(self.pos.clone(), EnPassantMode::Legal).to_string(),
+            ply: self.uci_moves.len() as u32,
+            analysis: self.mode == GameMode::Analysis,
+            eco: opening.eco,
+            opening: opening.name,
+            opening_moves: opening.children,
         }
     }
 
@@ -488,8 +616,11 @@ impl Game {
     }
 
     fn pgn_result(&self) -> &'static str {
-        if let Some(loser) = self.resigned {
+        if let Some(loser) = self.flagged.or(self.resigned) {
             return if loser == Color::White { "0-1" } else { "1-0" };
+        }
+        if self.draw_agreed {
+            return "1/2-1/2";
         }
         if self.pos.is_checkmate() {
             return if self.pos.turn() == Color::White {
@@ -547,17 +678,235 @@ impl Game {
         self.last_event = "resign".to_string();
     }
 
+    pub fn flag(&mut self, loser_white: bool) {
+        if self.is_game_over() {
+            return;
+        }
+        self.undo_stack.push(self.snapshot());
+        self.flagged = Some(if loser_white {
+            Color::White
+        } else {
+            Color::Black
+        });
+        self.selected = None;
+        self.pending_promotion = None;
+        self.last_event = "flag".to_string();
+    }
+
+    pub fn offer_draw(&mut self) {
+        if self.is_game_over() || self.pending_promotion.is_some() {
+            return;
+        }
+        let by = if self.mode == GameMode::VsAi {
+            self.player_color
+        } else {
+            self.pos.turn()
+        };
+        if self.mode == GameMode::VsAi {
+            let stm_eval = evaluate(&self.pos);
+            let human_is_stm = self.pos.turn() == self.player_color;
+            let human_score = if human_is_stm { stm_eval } else { -stm_eval };
+            if human_score <= 80 {
+                self.undo_stack.push(self.snapshot());
+                self.redo_stack.clear();
+                self.draw_agreed = true;
+                self.last_event = "draw".to_string();
+            } else {
+                self.last_event = "draw_declined".to_string();
+            }
+            return;
+        }
+        self.pending_draw_offer = Some(by);
+        self.last_event = "none".to_string();
+    }
+
+    pub fn accept_draw(&mut self) {
+        if self.is_game_over() || self.pending_draw_offer.is_none() {
+            return;
+        }
+        self.undo_stack.push(self.snapshot());
+        self.redo_stack.clear();
+        self.pending_draw_offer = None;
+        self.draw_agreed = true;
+        self.last_event = "draw".to_string();
+    }
+
+    pub fn decline_draw(&mut self) {
+        self.pending_draw_offer = None;
+        self.last_event = "draw_declined".to_string();
+    }
+
+    pub fn claim_draw(&mut self) {
+        if !self.can_claim_draw() {
+            return;
+        }
+        self.undo_stack.push(self.snapshot());
+        self.redo_stack.clear();
+        self.draw_agreed = true;
+        self.last_event = "draw".to_string();
+    }
+
+    pub fn hint(&mut self) {
+        if self.is_game_over() || self.pending_promotion.is_some() {
+            return;
+        }
+        if self.mode == GameMode::VsAi && self.pos.turn() != self.player_color {
+            return;
+        }
+        if self.hints_left() <= 0 {
+            self.last_event = "none".to_string();
+            return;
+        }
+        let depth = depth_for_difficulty(self.difficulty.max(1));
+        let Some(m) = best_move(&self.pos, depth) else {
+            return;
+        };
+        let (from, to) = move_from_to(&m);
+        self.hint = Some((from, to));
+        self.hints_used = self.hints_used.saturating_add(1);
+        self.last_event = "hint".to_string();
+    }
+
+    pub fn load_fen(&mut self, fen: &str) -> Result<(), String> {
+        self.pos = fen
+            .parse::<Fen>()
+            .map_err(|e| e.to_string())?
+            .into_position(CastlingMode::Standard)
+            .map_err(|e| e.to_string())?;
+        self.captured_by_white.clear();
+        self.captured_by_black.clear();
+        self.moves.clear();
+        self.uci_moves.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.selected = None;
+        self.pending_promotion = None;
+        self.last_move = None;
+        self.resigned = None;
+        self.draw_agreed = false;
+        self.flagged = None;
+        self.pending_draw_offer = None;
+        self.hint = None;
+        self.position_hashes = vec![hash_pos(&self.pos)];
+        self.start_fen = Fen::from_position(self.pos.clone(), EnPassantMode::Legal).to_string();
+        self.last_event = "none".to_string();
+        Ok(())
+    }
+
+    pub fn play_uci(&mut self, uci: &str) -> bool {
+        if self.pending_promotion.is_some() {
+            return false;
+        }
+        if self.mode != GameMode::Analysis && self.is_game_over() {
+            return false;
+        }
+        let Some(m) = self
+            .pos
+            .legal_moves()
+            .into_iter()
+            .find(|m| m.to_uci(CastlingMode::Standard).to_string() == uci)
+        else {
+            return false;
+        };
+        self.play_move(m);
+        true
+    }
+
+    pub fn goto_ply(&mut self, ply: i32) {
+        let line = self.uci_moves.clone();
+        let n = (ply.max(0) as usize).min(line.len());
+        let start = self.start_fen.clone();
+        let mode = self.mode;
+        let player_color = self.player_color;
+        let difficulty = self.difficulty;
+        let flipped = self.flipped;
+        let vs_ai = mode == GameMode::VsAi;
+        let play_white = player_color == Color::White;
+        *self = if mode == GameMode::Analysis {
+            Self::analysis_board()
+        } else {
+            Self::new(vs_ai, play_white, difficulty)
+        };
+        self.flipped = flipped;
+        self.player_color = player_color;
+        self.difficulty = difficulty;
+        self.mode = mode;
+        if start != self.start_fen {
+            let _ = self.reset_position(&start);
+            self.start_fen = start;
+        }
+        for uci in line.iter().take(n) {
+            if !self.play_uci_for_tests(uci) {
+                break;
+            }
+        }
+        self.redo_stack.clear();
+        self.last_event = "none".to_string();
+    }
+
+    fn reset_position(&mut self, fen: &str) -> Result<(), String> {
+        self.pos = fen
+            .parse::<Fen>()
+            .map_err(|e| e.to_string())?
+            .into_position(CastlingMode::Standard)
+            .map_err(|e| e.to_string())?;
+        self.captured_by_white.clear();
+        self.captured_by_black.clear();
+        self.moves.clear();
+        self.uci_moves.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.selected = None;
+        self.pending_promotion = None;
+        self.last_move = None;
+        self.resigned = None;
+        self.draw_agreed = false;
+        self.flagged = None;
+        self.pending_draw_offer = None;
+        self.hint = None;
+        self.position_hashes = vec![hash_pos(&self.pos)];
+        Ok(())
+    }
+
+    pub fn rust_analyze(&self, depth: u8) -> String {
+        let (score, pv) = analyze_pv(&self.pos, depth.max(1));
+        serde_json::json!({
+            "cp": score,
+            "pv": pv,
+            "depth": depth,
+            "engine": "hutts",
+        })
+        .to_string()
+    }
+
+    pub fn position_clone(&self) -> Chess {
+        self.pos.clone()
+    }
+
+    pub fn clear_redo(&mut self) {
+        self.redo_stack.clear();
+    }
+
+    pub fn set_last_event(&mut self, event: &str) {
+        self.last_event = event.to_string();
+    }
+
     pub fn export_save(&self) -> String {
         serde_json::json!({
             "vsAi": self.mode == GameMode::VsAi,
             "playAsWhite": self.player_color == Color::White,
             "difficulty": self.difficulty,
             "flipped": self.flipped,
+            "analysis": self.mode == GameMode::Analysis,
+            "startFen": self.start_fen,
             "fen": Fen::from_position(self.pos.clone(), EnPassantMode::Legal).to_string(),
             "uci": self.uci_moves,
             "resigned": self.resigned.map(color_name),
             "pendingFrom": self.pending_promotion.map(|(from, _)| from.to_string()),
             "pendingTo": self.pending_promotion.map(|(_, to)| to.to_string()),
+            "drawAgreed": self.draw_agreed,
+            "flagged": self.flagged.map(color_name),
+            "hintsUsed": self.hints_used,
         })
         .to_string()
     }
@@ -567,7 +916,15 @@ impl Game {
         let vs_ai = v.get("vsAi").and_then(|x| x.as_bool()).unwrap_or(false);
         let play_as_white = v.get("playAsWhite").and_then(|x| x.as_bool()).unwrap_or(true);
         let difficulty = v.get("difficulty").and_then(|x| x.as_u64()).unwrap_or(1) as u8;
-        let mut game = Game::new(vs_ai, play_as_white, difficulty);
+        let analysis = v.get("analysis").and_then(|x| x.as_bool()).unwrap_or(false);
+        let mut game = if analysis {
+            Game::analysis_board()
+        } else {
+            Game::new(vs_ai, play_as_white, difficulty)
+        };
+        if let Some(start) = v.get("startFen").and_then(|x| x.as_str()) {
+            let _ = game.load_fen(start);
+        }
         if let Some(flipped) = v.get("flipped").and_then(|x| x.as_bool()) {
             game.flipped = flipped;
         }
@@ -589,6 +946,7 @@ impl Game {
                     .into_position(CastlingMode::Standard)
                     .map_err(|e| e.to_string())?;
                 game.position_hashes = vec![hash_pos(&game.pos)];
+                game.start_fen = fen.to_string();
             }
         }
         let resigned = match v.get("resigned").and_then(|x| x.as_str()) {
@@ -600,6 +958,19 @@ impl Game {
             game.undo_stack.push(game.snapshot());
             game.resigned = Some(loser);
         }
+        if v.get("drawAgreed").and_then(|x| x.as_bool()).unwrap_or(false) && game.resigned.is_none()
+        {
+            game.undo_stack.push(game.snapshot());
+            game.draw_agreed = true;
+        }
+        if let Some(name) = v.get("flagged").and_then(|x| x.as_str()) {
+            game.flagged = match name {
+                "WHITE" => Some(Color::White),
+                "BLACK" => Some(Color::Black),
+                _ => None,
+            };
+        }
+        game.hints_used = v.get("hintsUsed").and_then(|x| x.as_u64()).unwrap_or(0) as u8;
         if game.resigned.is_none() {
             let from = v.get("pendingFrom").and_then(|x| x.as_str());
             let to = v.get("pendingTo").and_then(|x| x.as_str());
@@ -636,6 +1007,22 @@ impl Game {
         };
         self.play_move(m);
         true
+    }
+}
+
+impl Game {
+    pub fn import_text(
+        text: &str,
+        vs_ai: bool,
+        play_as_white: bool,
+        difficulty: u8,
+        analysis: bool,
+    ) -> Result<Self, String> {
+        let mut game = crate::pgn::import_pgn_or_fen(text, vs_ai, play_as_white, difficulty)?;
+        if analysis {
+            game.mode = GameMode::Analysis;
+        }
+        Ok(game)
     }
 }
 
@@ -877,5 +1264,65 @@ mod tests {
         let pgn = g.ui_state().pgn;
         assert!(pgn.contains("[Result \"1-0\"]"), "{pgn}");
         assert!(pgn.ends_with("1-0"), "{pgn}");
+    }
+
+    #[test]
+    fn undo_then_redo() {
+        let mut g = Game::new(false, true, 1);
+        assert!(g.play_uci_for_tests("e2e4"));
+        g.undo();
+        assert!(g.moves.is_empty());
+        assert!(g.ui_state().can_redo);
+        g.redo();
+        assert_eq!(g.moves, vec!["e4"]);
+        assert!(!g.ui_state().can_redo);
+    }
+
+    #[test]
+    fn two_player_draw_agreement() {
+        let mut g = Game::new(false, true, 1);
+        g.offer_draw();
+        assert!(g.ui_state().draw_offer_pending);
+        g.accept_draw();
+        assert!(g.is_game_over());
+        assert!(g.ui_state().game_status.unwrap().contains("agreement"));
+    }
+
+    #[test]
+    fn claim_draw_after_long_halfmove() {
+        let mut g = Game::new(false, true, 1);
+        g.load_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 80 40").unwrap();
+        assert!(g.ui_state().can_claim_draw);
+        g.claim_draw();
+        assert!(g.is_game_over());
+    }
+
+    #[test]
+    fn opening_named_after_e4_e5_nf3_nc6_bb5() {
+        let mut g = Game::new(false, true, 1);
+        for uci in ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"] {
+            assert!(g.play_uci_for_tests(uci));
+        }
+        let state = g.ui_state();
+        assert_eq!(state.opening.as_deref(), Some("Ruy Lopez"));
+        assert!(state.opening_moves.iter().any(|c| c.san.contains('a') || c.uci == "a7a6" || !c.san.is_empty()));
+    }
+
+    #[test]
+    fn analysis_goto_ply_replays_prefix() {
+        let mut g = Game::analysis_board();
+        assert!(g.play_uci_for_tests("e2e4"));
+        assert!(g.play_uci_for_tests("e7e5"));
+        g.goto_ply(1);
+        assert_eq!(g.moves, vec!["e4"]);
+        assert_eq!(g.ui_state().turn, "BLACK");
+        assert!(g.ui_state().analysis);
+    }
+
+    #[test]
+    fn rust_analyze_returns_pv() {
+        let g = Game::analysis_board();
+        let v: serde_json::Value = serde_json::from_str(&g.rust_analyze(2)).unwrap();
+        assert!(v.get("pv").unwrap().as_array().unwrap().len() >= 1);
     }
 }

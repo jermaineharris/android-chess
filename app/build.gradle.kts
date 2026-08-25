@@ -14,8 +14,8 @@ android {
     defaultConfig {
         applicationId = "com.huttsmedia.chess"
         minSdk = 30
-        versionCode = 6
-        versionName = "2.2.1"
+        versionCode = 8
+        versionName = "2.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -31,6 +31,12 @@ android {
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
 }
@@ -65,8 +71,34 @@ tasks.register<Exec>("cargoNdkBuild") {
     outputs.dir(jniOutDir.asFile)
 }
 
-tasks.named("preBuild").configure {
+tasks.register("fetchStockfish") {
+    val cacheDir = File(System.getProperty("user.home"), ".cache/hutts-chess/stockfish")
+    val src = File(cacheDir, "stockfish-android-armv8")
+    val destDir = jniOutDir.dir("arm64-v8a").asFile
+    val dest = File(destDir, "libstockfish.so")
+    val licenseDest = layout.projectDirectory.dir("src/main/assets/stockfish").asFile
+    outputs.file(dest)
+    doLast {
+        destDir.mkdirs()
+        licenseDest.mkdirs()
+        if (!src.isFile) {
+            throw GradleException(
+                "Stockfish binary missing at $src — download sf_17.1 stockfish-android-armv8.tar from official-stockfish/Stockfish releases into ~/.cache/hutts-chess/"
+            )
+        }
+        src.copyTo(dest, overwrite = true)
+        dest.setExecutable(true, false)
+        File(cacheDir, "Copying.txt").takeIf { it.isFile }?.copyTo(File(licenseDest, "Copying.txt"), overwrite = true)
+        File(cacheDir, "AUTHORS").takeIf { it.isFile }?.copyTo(File(licenseDest, "AUTHORS"), overwrite = true)
+    }
+}
+
+tasks.named("fetchStockfish") {
     dependsOn("cargoNdkBuild")
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("fetchStockfish")
 }
 
 dependencies {

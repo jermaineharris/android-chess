@@ -341,6 +341,27 @@ pub fn best_move(pos: &Chess, depth: u8) -> Option<Move> {
     score_root_moves(pos, depth).into_iter().next().map(|(_, m)| m)
 }
 
+/// Root eval (side-to-move) plus a short principal variation in UCI.
+pub fn analyze_pv(pos: &Chess, depth: u8) -> (i32, Vec<String>) {
+    let scored = score_root_moves(pos, depth);
+    let Some((score, best)) = scored.into_iter().next() else {
+        return (evaluate(pos), Vec::new());
+    };
+    let mut pv = vec![best.to_uci(CastlingMode::Standard).to_string()];
+    let mut child = pos.clone();
+    child.play_unchecked(&best);
+    let mut remaining = depth.saturating_sub(1);
+    while remaining > 0 {
+        let Some(m) = best_move(&child, remaining.max(1)) else {
+            break;
+        };
+        pv.push(m.to_uci(CastlingMode::Standard).to_string());
+        child.play_unchecked(&m);
+        remaining -= 1;
+    }
+    (score, pv)
+}
+
 pub fn depth_for_difficulty(difficulty: u8) -> u8 {
     match difficulty {
         0 => 1,

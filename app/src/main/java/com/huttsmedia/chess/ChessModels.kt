@@ -34,8 +34,25 @@ data class LastMove(val from: Position, val to: Position)
 
 sealed class GameMode {
     data object TwoPlayer : GameMode()
+    data object Analysis : GameMode()
     data class VsAI(val playerColor: PieceColor, val difficulty: AiDifficulty) : GameMode()
 }
+
+data class OpeningMove(
+    val san: String,
+    val uci: String,
+    val eco: String,
+    val name: String,
+    val lines: Int
+)
+
+enum class PieceStyle { STANDARD, HIGH_CONTRAST, FLAT }
+
+data class HistoryEntry(
+    val time: Long,
+    val summary: String,
+    val save: String
+)
 
 data class ChessUiState(
     val pieces: List<List<Piece?>> = emptyBoard(),
@@ -58,16 +75,53 @@ data class ChessUiState(
     val kingInCheck: Boolean = false,
     val pgn: String = "",
     val material: Int = 0,
-    val lastEvent: String = "none"
+    val lastEvent: String = "none",
+    val canRedo: Boolean = false,
+    val canClaimDraw: Boolean = false,
+    val canOfferDraw: Boolean = false,
+    val drawOfferPending: Boolean = false,
+    val drawOfferBy: PieceColor? = null,
+    val hintsLeft: Int = 99,
+    val hint: LastMove? = null,
+    val halfmoves: Int = 0,
+    val whiteClockMs: Long = 0,
+    val blackClockMs: Long = 0,
+    val clocksEnabled: Boolean = false,
+    val fen: String = "",
+    val ply: Int = 0,
+    val analysis: Boolean = false,
+    val eco: String? = null,
+    val opening: String? = null,
+    val openingMoves: List<OpeningMove> = emptyList(),
+    val evalCp: Int? = null,
+    val evalMate: Int? = null,
+    val evalWhite: Boolean = true,
+    val pvUci: List<String> = emptyList(),
+    val engineName: String? = null,
+    val engineDepth: Int = 0,
+    val analyzing: Boolean = false
 )
 
 fun emptyBoard(): List<List<Piece?>> = List(8) { List(8) { null } }
+
+fun uciToLastMove(uci: String): LastMove? {
+    if (uci.length < 4) return null
+    val fromCol = uci[0] - 'a'
+    val fromRow = 8 - (uci[1] - '0')
+    val toCol = uci[2] - 'a'
+    val toRow = 8 - (uci[3] - '0')
+    if (fromCol !in 0..7 || toCol !in 0..7 || fromRow !in 0..7 || toRow !in 0..7) return null
+    return LastMove(Position(fromRow, fromCol), Position(toRow, toCol))
+}
 
 fun parseChessState(
     json: String,
     gameMode: GameMode,
     gameStarted: Boolean,
-    isAiThinking: Boolean
+    isAiThinking: Boolean,
+    whiteClockMs: Long = 0,
+    blackClockMs: Long = 0,
+    clocksEnabled: Boolean = false
 ): ChessUiState {
     val obj = JSONObject(json)
     if (obj.has("error")) {
@@ -75,7 +129,10 @@ fun parseChessState(
             gameMode = gameMode,
             gameStarted = gameStarted,
             isAiThinking = isAiThinking,
-            gameStatus = obj.optString("error")
+            gameStatus = obj.optString("error"),
+            whiteClockMs = whiteClockMs,
+            blackClockMs = blackClockMs,
+            clocksEnabled = clocksEnabled
         )
     }
     val lastArr = obj.optJSONArray("lastMove")
@@ -83,6 +140,15 @@ fun parseChessState(
         LastMove(
             Position(lastArr.getInt(0), lastArr.getInt(1)),
             Position(lastArr.getInt(2), lastArr.getInt(3))
+        )
+    } else {
+        null
+    }
+    val hintArr = obj.optJSONArray("hint")
+    val hint = if (hintArr != null && hintArr.length() == 4) {
+        LastMove(
+            Position(hintArr.getInt(0), hintArr.getInt(1)),
+            Position(hintArr.getInt(2), hintArr.getInt(3))
         )
     } else {
         null
@@ -110,12 +176,30 @@ fun parseChessState(
         kingInCheck = obj.optBoolean("kingInCheck"),
         pgn = obj.optString("pgn"),
         material = obj.optInt("material"),
-        lastEvent = obj.optString("lastEvent", "none")
+        lastEvent = obj.optString("lastEvent", "none"),
+        canRedo = obj.optBoolean("canRedo"),
+        canClaimDraw = obj.optBoolean("canClaimDraw"),
+        canOfferDraw = obj.optBoolean("canOfferDraw"),
+        drawOfferPending = obj.optBoolean("drawOfferPending"),
+        drawOfferBy = obj.optNullableString("drawOfferBy")?.let { PieceColor.valueOf(it) },
+        hintsLeft = obj.optInt("hintsLeft", 99),
+        hint = hint,
+        halfmoves = obj.optInt("halfmoves"),
+        whiteClockMs = whiteClockMs,
+        blackClockMs = blackClockMs,
+        clocksEnabled = clocksEnabled,
+        fen = obj.optString("fen"),
+        ply = obj.optInt("ply"),
+        analysis = obj.optBoolean("analysis") || gameMode is GameMode.Analysis,
+        eco = obj.optNullableString("eco"),
+        opening = obj.optNullableString("opening"),
+        openingMoves = parseOpeningMoves(obj.optJSONArray("openingMoves"))
     )
 }
 
 fun parseSavedGameMode(json: String): GameMode {
     val obj = JSONObject(json)
+    if (obj.optBoolean("analysis")) return GameMode.Analysis
     if (!obj.optBoolean("vsAi")) return GameMode.TwoPlayer
     val playAsWhite = obj.optBoolean("playAsWhite", true)
     val difficulty = obj.optInt("difficulty", 1)
@@ -124,6 +208,20 @@ fun parseSavedGameMode(json: String): GameMode {
         playerColor = if (playAsWhite) PieceColor.WHITE else PieceColor.BLACK,
         difficulty = ai
     )
+}
+
+private fun parseOpeningMoves(arr: JSONArray?): List<OpeningMove> {
+    if (arr == null) return emptyList()
+    return (0 until arr.length()).mapNotNull { i ->
+        val o = arr.optJSONObject(i) ?: return@mapNotNull null
+        OpeningMove(
+            san = o.optString("san"),
+            uci = o.optString("uci"),
+            eco = o.optString("eco"),
+            name = o.optString("name"),
+            lines = o.optInt("lines")
+        )
+    }
 }
 
 private fun parsePositions(arr: JSONArray?): Set<Position> {
