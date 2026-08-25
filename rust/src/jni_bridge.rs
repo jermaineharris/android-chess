@@ -26,10 +26,7 @@ pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_newGame<'local>(
     play_as_white: jboolean,
     difficulty: i32,
 ) -> jni::sys::jstring {
-    let mut game = Game::new(vs_ai != 0, play_as_white != 0, difficulty.clamp(0, 3) as u8);
-    if game.needs_ai_open() {
-        game.play_ai();
-    }
+    let game = Game::new(vs_ai != 0, play_as_white != 0, difficulty.clamp(0, 3) as u8);
     let json = game.to_json();
     *GAME.lock().expect("game mutex") = Some(game);
     _env.new_string(json)
@@ -58,6 +55,17 @@ pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_promote<'local>(
 ) -> jni::sys::jstring {
     let name: String = env.get_string(&piece).expect("piece").into();
     let json = with_game(|g| g.promote(&name));
+    env.new_string(json)
+        .expect("string")
+        .into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_undo<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.undo());
     env.new_string(json)
         .expect("string")
         .into_raw()

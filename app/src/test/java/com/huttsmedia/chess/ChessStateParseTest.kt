@@ -31,7 +31,7 @@ class ChessStateParseTest {
               "kingInCheck": false
             }
         """.trimIndent()
-        val state = parseChessState(json, GameMode.TwoPlayer)
+        val state = parseChessState(json, GameMode.TwoPlayer, gameStarted = true, isAiThinking = false)
         assertEquals(PieceType.ROOK, state.pieces[0][0]?.type)
         assertEquals(PieceColor.WHITE, state.pieces[7][4]?.color)
         assertEquals(listOf("e4"), state.moves)
