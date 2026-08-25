@@ -220,9 +220,11 @@ fun ChessGame(
                 }
             }
 
-            uiState.gameStatus?.let {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(it, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            if (!uiState.gameOver) {
+                uiState.gameStatus?.let {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(it, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                }
             }
         }
     }
