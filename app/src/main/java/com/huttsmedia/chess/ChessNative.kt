@@ -1,4 +1,4 @@
-package com.vayunmathur.games.chess
+package com.huttsmedia.chess
 
 object ChessNative {
     init {

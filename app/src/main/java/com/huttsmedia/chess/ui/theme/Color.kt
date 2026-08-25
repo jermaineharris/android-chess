@@ -1,4 +1,4 @@
-package com.vayunmathur.games.chess.ui.theme
+package com.huttsmedia.chess.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

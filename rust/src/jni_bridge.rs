@@ -19,7 +19,7 @@ fn with_game<F: FnOnce(&mut Game)>(f: F) -> String {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_newGame<'local>(
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_newGame<'local>(
     _env: JNIEnv<'local>,
     _class: JClass<'local>,
     vs_ai: jboolean,
@@ -38,7 +38,7 @@ pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_newGame<'loc
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_onSquareClick<'local>(
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_onSquareClick<'local>(
     env: JNIEnv<'local>,
     _class: JClass<'local>,
     row: i32,
@@ -51,7 +51,7 @@ pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_onSquareClic
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_promote<'local>(
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_promote<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass<'local>,
     piece: JString<'local>,
@@ -64,7 +64,7 @@ pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_promote<'loc
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_aiMove<'local>(
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_aiMove<'local>(
     env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jni::sys::jstring {
@@ -75,7 +75,7 @@ pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_aiMove<'loca
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_vayunmathur_games_chess_ChessNative_getState<'local>(
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_getState<'local>(
     env: JNIEnv<'local>,
     _class: JClass<'local>,
 ) -> jni::sys::jstring {

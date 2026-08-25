@@ -1,4 +1,4 @@
-package com.vayunmathur.games.chess
+package com.huttsmedia.chess
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.vayunmathur.games.chess.ui.theme.ChessTheme
+import com.huttsmedia.chess.ui.theme.ChessTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -1,4 +1,4 @@
-package com.vayunmathur.games.chess
+package com.huttsmedia.chess
 
 import org.json.JSONArray
 import org.json.JSONObject

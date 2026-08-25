@@ -6,13 +6,13 @@ plugins {
 }
 
 android {
-    namespace = "com.vayunmathur.games.chess"
+    namespace = "com.huttsmedia.chess"
     compileSdk = 36
 
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "com.vayunmathur.games.chess"
+        applicationId = "com.huttsmedia.chess"
         minSdk = 30
         versionCode = 3
         versionName = "2.0"

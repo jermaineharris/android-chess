@@ -1,4 +1,4 @@
-package com.vayunmathur.games.chess
+package com.huttsmedia.chess
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
