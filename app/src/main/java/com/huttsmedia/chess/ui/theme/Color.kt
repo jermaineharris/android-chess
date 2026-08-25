@@ -2,10 +2,13 @@ package com.huttsmedia.chess.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
-
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+val ClubGold = Color(0xFFD4B45A)
+val ClubGoldDark = Color(0xFF8B6914)
+val ClubSage = Color(0xFF8FA87A)
+val ClubSageDark = Color(0xFF4A6B4A)
+val ClubFelt = Color(0xFF16110C)
+val ClubWalnut = Color(0xFF241A12)
+val ClubPaper = Color(0xFFF6F0E4)
+val ClubInk = Color(0xFF2A1F14)
+val ClubCream = Color(0xFFF3E6D0)
+val ClubFrame = Color(0xFF5C3D24)

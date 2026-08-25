@@ -45,10 +45,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -71,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -375,7 +378,9 @@ fun ChessGame(
         else -> "even"
     }
 
-    Scaffold { innerPadding ->
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background
+    ) { innerPadding ->
         Column(
             Modifier
                 .fillMaxSize()
@@ -386,8 +391,17 @@ fun ChessGame(
         ) {
             CapturedPiecesRow(topCaptured, viewModel.pieceStyle)
             Spacer(modifier = Modifier.height(8.dp))
-            Text(turnLabel, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-            Text("Material $materialLabel", fontSize = 14.sp)
+            Text(
+                turnLabel,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Text(
+                "Material $materialLabel",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f)
+            )
             uiState.opening?.takeIf { viewModel.showOpeningNames }?.let { name ->
                 Text(
                     listOfNotNull(uiState.eco, name).joinToString(" · "),
@@ -556,17 +570,35 @@ fun MovesList(
     LaunchedEffect(moves.size) {
         scroll.animateScrollTo(scroll.maxValue)
     }
+    val sheet = MaterialTheme.colorScheme.surfaceVariant
+    val ink = MaterialTheme.colorScheme.onSurface
     Column(
         Modifier
             .fillMaxWidth()
             .height(120.dp)
-            .border(2.dp, Color.Gray)
+            .clip(RoundedCornerShape(4.dp))
+            .background(sheet)
+            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
             .verticalScroll(scroll)
     ) {
-        Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
-            Text("White", fontWeight = if (turn == PieceColor.WHITE) FontWeight.Bold else FontWeight.Normal)
-            VerticalDivider(color = MaterialTheme.colorScheme.primary)
-            Text("Black", fontWeight = if (turn == PieceColor.BLACK) FontWeight.Bold else FontWeight.Normal)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.primaryContainer)
+                .padding(vertical = 4.dp),
+            Arrangement.SpaceEvenly
+        ) {
+            Text(
+                "White",
+                fontWeight = if (turn == PieceColor.WHITE) FontWeight.Bold else FontWeight.Normal,
+                color = ink
+            )
+            VerticalDivider(color = MaterialTheme.colorScheme.outline)
+            Text(
+                "Black",
+                fontWeight = if (turn == PieceColor.BLACK) FontWeight.Bold else FontWeight.Normal,
+                color = ink
+            )
         }
         rows.forEachIndexed { index, move ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -587,7 +619,7 @@ fun MovesList(
                 )
                 if (move.size == 2) {
                     val blackPly = whitePly + 1
-                    VerticalDivider(color = MaterialTheme.colorScheme.primary)
+                    VerticalDivider(color = MaterialTheme.colorScheme.outline)
                     Text(
                         move[1],
                         Modifier
@@ -678,7 +710,10 @@ fun CapturedPiecesRow(pieces: List<Piece>, pieceStyle: PieceStyle = PieceStyle.S
             .padding(4.dp), Alignment.Center
     ) {
         if (pieces.isNotEmpty()) {
-            Card {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            ) {
                 Row(Modifier.padding(4.dp)) {
                     pieces.forEach { ChessPiece(it, 32.dp, pieceStyle) }
                 }
@@ -703,9 +738,15 @@ fun ChessBoard(
     @Suppress("UNUSED_VARIABLE")
     val tick = settingsTick
     Column(Modifier.fillMaxWidth()) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF5C3D24)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            shape = RoundedCornerShape(6.dp)
+        ) {
         Row(
             Modifier
                 .fillMaxWidth()
+                .padding(8.dp)
                 .aspectRatio(1.06f),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -719,7 +760,12 @@ fun ChessBoard(
                 if (showCoordinates) {
                     for (displayRow in 0..7) {
                         val logicalRow = if (flipped) 7 - displayRow else displayRow
-                        Text("${8 - logicalRow}", fontSize = 10.sp, textAlign = TextAlign.Center)
+                        Text(
+                            "${8 - logicalRow}",
+                            fontSize = 10.sp,
+                            textAlign = TextAlign.Center,
+                            color = Color(0xFFF3E6D0)
+                        )
                     }
                 }
             }
@@ -801,6 +847,7 @@ fun ChessBoard(
             }
             EvalBar(uiState = uiState, flipped = flipped)
         }
+        }
         Row(Modifier.fillMaxWidth()) {
             Spacer(Modifier.width(16.dp))
             Row(Modifier.weight(1f)) {
@@ -842,6 +889,15 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMoveArrow(
 @Composable
 fun ChessPiece(piece: Piece, size: Dp? = null, pieceStyle: PieceStyle = PieceStyle.STANDARD) {
     val base = if (size != null) Modifier.size(size) else Modifier.fillMaxSize()
+    if (pieceStyle == PieceStyle.STANDARD) {
+        Image(
+            painterResource(id = piece.type.stauntonResId(piece.color)),
+            "${piece.color} ${piece.type}",
+            base.padding(2.dp),
+            contentScale = ContentScale.Fit
+        )
+        return
+    }
     val blackTint = when (pieceStyle) {
         PieceStyle.HIGH_CONTRAST -> Color.Black
         else -> Color(0xFF1A1A1A)
@@ -854,13 +910,13 @@ fun ChessPiece(piece: Piece, size: Dp? = null, pieceStyle: PieceStyle = PieceSty
     if (piece.color == PieceColor.WHITE && pieceStyle != PieceStyle.FLAT) {
         Box(base, contentAlignment = Alignment.Center) {
             Image(
-                painterResource(id = piece.type.resID),
+                painterResource(id = piece.type.glyphResId),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize().padding(if (pieceStyle == PieceStyle.HIGH_CONTRAST) 0.dp else 1.dp),
                 colorFilter = ColorFilter.tint(Color(0xFF222222))
             )
             Image(
-                painterResource(id = piece.type.resID),
+                painterResource(id = piece.type.glyphResId),
                 "${piece.color} ${piece.type}",
                 modifier = Modifier.fillMaxSize().padding(if (pieceStyle == PieceStyle.HIGH_CONTRAST) 2.dp else 3.dp),
                 colorFilter = ColorFilter.tint(whiteFill)
@@ -868,7 +924,7 @@ fun ChessPiece(piece: Piece, size: Dp? = null, pieceStyle: PieceStyle = PieceSty
         }
     } else {
         Image(
-            painterResource(id = piece.type.resID),
+            painterResource(id = piece.type.glyphResId),
             "${piece.color} ${piece.type}",
             base.padding(2.dp),
             colorFilter = ColorFilter.tint(if (piece.color == PieceColor.WHITE) whiteFill else blackTint)

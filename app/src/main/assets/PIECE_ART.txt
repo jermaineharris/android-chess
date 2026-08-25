@@ -1,0 +1,4 @@
+Board pieces are rasterized from Lichess cburnett SVGs (Colin M.L. Burnett / lichess-org/lila public/piece/cburnett).
+
+R13 FLUX.1-dev was tried 2026-08-25 for a custom 3D set (art/flux-pieces/). It could not
+reliably distinguish queen/rook/bishop/pawn from a king, so those gens are not used in-app.

@@ -6,7 +6,7 @@ import org.json.JSONObject
 enum class PieceType {
     KING, QUEEN, ROOK, BISHOP, KNIGHT, PAWN;
 
-    val resID: Int
+    val glyphResId: Int
         get() = when (this) {
             KING -> R.drawable.chess_king_2_fill1_24px
             QUEEN -> R.drawable.chess_queen_fill1_24px
@@ -15,6 +15,15 @@ enum class PieceType {
             KNIGHT -> R.drawable.chess_knight_fill1_24px
             PAWN -> R.drawable.chess_pawn_fill1_24px
         }
+
+    fun stauntonResId(color: PieceColor): Int = when (this) {
+        KING -> if (color == PieceColor.WHITE) R.drawable.piece_white_king else R.drawable.piece_black_king
+        QUEEN -> if (color == PieceColor.WHITE) R.drawable.piece_white_queen else R.drawable.piece_black_queen
+        ROOK -> if (color == PieceColor.WHITE) R.drawable.piece_white_rook else R.drawable.piece_black_rook
+        BISHOP -> if (color == PieceColor.WHITE) R.drawable.piece_white_bishop else R.drawable.piece_black_bishop
+        KNIGHT -> if (color == PieceColor.WHITE) R.drawable.piece_white_knight else R.drawable.piece_black_knight
+        PAWN -> if (color == PieceColor.WHITE) R.drawable.piece_white_pawn else R.drawable.piece_black_pawn
+    }
 }
 
 enum class PieceColor { WHITE, BLACK }
