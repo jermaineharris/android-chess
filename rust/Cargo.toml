@@ -1,0 +1,20 @@
+[package]
+name = "chessjni"
+version = "0.1.0"
+edition = "2021"
+description = "Rust chess rules, notation, and AI for the Android Chess app"
+
+[lib]
+name = "chessjni"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jni = "0.21"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+shakmaty = "0.27"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

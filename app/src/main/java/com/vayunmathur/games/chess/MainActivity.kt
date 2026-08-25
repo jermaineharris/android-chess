@@ -33,7 +33,6 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,12 +60,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             ChessTheme {
                 val viewModel: ChessViewModel = viewModel()
-
                 var showNewGameDialog by remember { mutableStateOf(true) }
-
-                LaunchedEffect(Unit) {
-                    StockfishEngine.start(this@MainActivity, "nn-c288c895ea92.nnue", "nn-37f18f62d772.nnue")
-                }
 
                 ChessGame(
                     viewModel = viewModel,
@@ -86,21 +80,15 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    companion object {
-      init {
-         System.loadLibrary("stockfishjni")
-      }
-    }
 }
 
 @Composable
 fun NewGameDialog(onNewGame: (GameMode) -> Unit) {
-    var showSettings by remember { mutableStateOf<((PieceColor, StockfishEngine.Difficulty) -> Unit)?>(null) }
+    var showSettings by remember { mutableStateOf<((PieceColor, AiDifficulty) -> Unit)?>(null) }
 
     showSettings?.let { startGame ->
         var selectedColor by remember { mutableStateOf(PieceColor.WHITE) }
-        var selectedDifficulty by remember {mutableStateOf(StockfishEngine.Difficulty.INTERMEDIATE)}
+        var selectedDifficulty by remember { mutableStateOf(AiDifficulty.INTERMEDIATE) }
         AlertDialog(
             properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
             modifier = Modifier.fillMaxWidth(0.9f),
@@ -132,7 +120,7 @@ fun NewGameDialog(onNewGame: (GameMode) -> Unit) {
                     }
                     Spacer(Modifier.height(16.dp))
                     SingleChoiceSegmentedButtonRow {
-                        StockfishEngine.Difficulty.entries.zip(listOf("Easy", "Medium", "Hard", "Master")).forEachIndexed { idx, (value, label) ->
+                        AiDifficulty.entries.zip(listOf("Easy", "Medium", "Hard", "Master")).forEachIndexed { idx, (value, label) ->
                             SegmentedButton(
                                 shape = SegmentedButtonDefaults.itemShape(idx, 4),
                                 onClick = { selectedDifficulty = value },
@@ -151,27 +139,26 @@ fun NewGameDialog(onNewGame: (GameMode) -> Unit) {
             },
             confirmButton = { }
         )
-    } ?:
-        AlertDialog(
-            onDismissRequest = { },
-            title = { Text(text = "New Game") },
-            text = {
-                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Button(onClick = { onNewGame(GameMode.TwoPlayer) }) {
-                        Text("2-Player Local")
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = {
-                        showSettings = { color, difficulty ->
-                            onNewGame(GameMode.VsAI(color, difficulty))
-                        }
-                    }) {
-                        Text("Human vs AI")
-                    }
+    } ?: AlertDialog(
+        onDismissRequest = { },
+        title = { Text(text = "New Game") },
+        text = {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Button(onClick = { onNewGame(GameMode.TwoPlayer) }) {
+                    Text("2-Player Local")
                 }
-            },
-            confirmButton = {}
-        )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = {
+                    showSettings = { color, difficulty ->
+                        onNewGame(GameMode.VsAI(color, difficulty))
+                    }
+                }) {
+                    Text("Human vs AI")
+                }
+            }
+        },
+        confirmButton = {}
+    )
 }
 
 @Composable
@@ -182,8 +169,9 @@ fun ChessGame(
     onNewGame: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    if (uiState.board.promotionPosition != null) {
-        PawnPromotionDialog(if (uiState.turn == PieceColor.WHITE) PieceColor.BLACK else PieceColor.WHITE, onPromote = onPromote)
+    val promotionColor = uiState.promotionColor
+    if (uiState.promotionPending && promotionColor != null) {
+        PawnPromotionDialog(promotionColor, onPromote = onPromote)
     }
 
     Scaffold { innerPadding ->
@@ -194,15 +182,15 @@ fun ChessGame(
             Arrangement.Center,
             Alignment.CenterHorizontally
         ) {
-            CapturedPiecesRow(uiState.board.capturedByBlack)
+            CapturedPiecesRow(uiState.capturedByBlack)
             Spacer(modifier = Modifier.height(16.dp))
-            MovesList(moves = uiState.board.moves, turn = uiState.turn)
+            MovesList(moves = uiState.moves, turn = uiState.turn)
             ChessBoard(
                 viewModel = viewModel,
                 onSquareClick = onSquareClick
             )
             Spacer(modifier = Modifier.height(16.dp))
-            CapturedPiecesRow(uiState.board.capturedByWhite)
+            CapturedPiecesRow(uiState.capturedByWhite)
             Spacer(modifier = Modifier.height(16.dp))
             Button(onClick = onNewGame) {
                 Text("New Game")
@@ -217,7 +205,7 @@ fun ChessGame(
 }
 
 @Composable
-fun MovesList(moves: List<Move>, turn: PieceColor) {
+fun MovesList(moves: List<String>, turn: PieceColor) {
     Box(Modifier.height(100.dp)) {
         LazyColumn(
             Modifier
@@ -233,10 +221,10 @@ fun MovesList(moves: List<Move>, turn: PieceColor) {
             }
             items(moves.chunked(2)) { move ->
                 Row(Modifier.fillMaxWidth()) {
-                    Text(move[0].toString(), Modifier.weight(1f), textAlign = TextAlign.Center)
+                    Text(move[0], Modifier.weight(1f), textAlign = TextAlign.Center)
                     if (move.size == 2) {
                         VerticalDivider(color = MaterialTheme.colorScheme.primary)
-                        Text(move[1].toString(), Modifier.weight(1f), textAlign = TextAlign.Center)
+                        Text(move[1], Modifier.weight(1f), textAlign = TextAlign.Center)
                     } else {
                         VerticalDivider()
                         Text("", Modifier.weight(1f), textAlign = TextAlign.Center)
@@ -289,21 +277,21 @@ fun ChessBoard(
     onSquareClick: (Position) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val board = uiState.board
+    val pieces = uiState.pieces
     val selectedPiece = uiState.selectedPiece
     val turn = uiState.turn
     val isFlipped = uiState.isBoardFlipped
-    val isKingInCheck = board.isKingInCheck(turn)
+    val isKingInCheck = uiState.kingInCheck
     Column(
         Modifier
             .fillMaxWidth()
             .aspectRatio(1f)
             .graphicsLayer { if (isFlipped) rotationZ = 180f }
     ) {
-        for (i in board.pieces.indices) {
+        for (i in pieces.indices) {
             Row(modifier = Modifier.weight(1f)) {
-                for (j in board.pieces[i].indices) {
-                    val piece = board.pieces[i][j]
+                for (j in pieces[i].indices) {
+                    val piece = pieces[i][j]
                     val isSelected = selectedPiece?.let { it.row == i && it.col == j } ?: false
                     val isKingInCheckSquare =
                         isKingInCheck && piece?.type == PieceType.KING && piece.color == turn
