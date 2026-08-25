@@ -92,3 +92,73 @@ pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_getState<'local>(
         .expect("string")
         .into_raw()
 }
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_deselect<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.deselect());
+    env.new_string(json)
+        .expect("string")
+        .into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_toggleFlip<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.toggle_flip());
+    env.new_string(json)
+        .expect("string")
+        .into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_resign<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = with_game(|g| g.resign());
+    env.new_string(json)
+        .expect("string")
+        .into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_exportSave<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+) -> jni::sys::jstring {
+    let json = {
+        let guard = GAME.lock().expect("game mutex");
+        match guard.as_ref() {
+            Some(game) => game.export_save(),
+            None => serde_json::json!({ "error": "no game" }).to_string(),
+        }
+    };
+    env.new_string(json)
+        .expect("string")
+        .into_raw()
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_huttsmedia_chess_ChessNative_importSave<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    save: JString<'local>,
+) -> jni::sys::jstring {
+    let raw: String = env.get_string(&save).expect("save").into();
+    let json = match Game::import_save(&raw) {
+        Ok(game) => {
+            let out = game.to_json();
+            *GAME.lock().expect("game mutex") = Some(game);
+            out
+        }
+        Err(err) => serde_json::json!({ "error": err }).to_string(),
+    };
+    env.new_string(json)
+        .expect("string")
+        .into_raw()
+}

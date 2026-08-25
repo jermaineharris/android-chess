@@ -55,7 +55,10 @@ data class ChessUiState(
     val isBoardFlipped: Boolean = false,
     val promotionPending: Boolean = false,
     val promotionColor: PieceColor? = null,
-    val kingInCheck: Boolean = false
+    val kingInCheck: Boolean = false,
+    val pgn: String = "",
+    val material: Int = 0,
+    val lastEvent: String = "none"
 )
 
 fun emptyBoard(): List<List<Piece?>> = List(8) { List(8) { null } }
@@ -104,7 +107,22 @@ fun parseChessState(
         isBoardFlipped = obj.optBoolean("isBoardFlipped"),
         promotionPending = obj.optBoolean("promotionPending"),
         promotionColor = obj.optNullableString("promotionColor")?.let { PieceColor.valueOf(it) },
-        kingInCheck = obj.optBoolean("kingInCheck")
+        kingInCheck = obj.optBoolean("kingInCheck"),
+        pgn = obj.optString("pgn"),
+        material = obj.optInt("material"),
+        lastEvent = obj.optString("lastEvent", "none")
+    )
+}
+
+fun parseSavedGameMode(json: String): GameMode {
+    val obj = JSONObject(json)
+    if (!obj.optBoolean("vsAi")) return GameMode.TwoPlayer
+    val playAsWhite = obj.optBoolean("playAsWhite", true)
+    val difficulty = obj.optInt("difficulty", 1)
+    val ai = AiDifficulty.entries.find { it.nativeValue == difficulty } ?: AiDifficulty.INTERMEDIATE
+    return GameMode.VsAI(
+        playerColor = if (playAsWhite) PieceColor.WHITE else PieceColor.BLACK,
+        difficulty = ai
     )
 }
 

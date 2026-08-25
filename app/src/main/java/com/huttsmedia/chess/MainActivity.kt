@@ -1,7 +1,14 @@
 package com.huttsmedia.chess
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
+import android.view.HapticFeedbackConstants
+import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.Image
@@ -21,10 +28,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -35,8 +41,10 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -48,6 +56,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -67,6 +77,17 @@ class MainActivity : ComponentActivity() {
                 val viewModel: ChessViewModel = viewModel()
                 val uiState by viewModel.uiState.collectAsState()
 
+                DisposableEffect(uiState.gameStarted && !uiState.gameOver) {
+                    if (uiState.gameStarted && !uiState.gameOver) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                    onDispose {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
+
                 ChessGame(
                     viewModel = viewModel,
                     onSquareClick = viewModel::onSquareClick,
@@ -75,7 +96,13 @@ class MainActivity : ComponentActivity() {
                 )
 
                 if (!uiState.gameStarted) {
-                    NewGameDialog(onNewGame = viewModel::onNewGame)
+                    NewGameDialog(
+                        initialColor = viewModel.lastAiColor(),
+                        initialDifficulty = viewModel.lastAiDifficulty(),
+                        dismissable = false,
+                        onDismiss = {},
+                        onNewGame = viewModel::onNewGame
+                    )
                 }
             }
         }
@@ -83,16 +110,25 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun NewGameDialog(onNewGame: (GameMode) -> Unit) {
+fun NewGameDialog(
+    initialColor: PieceColor,
+    initialDifficulty: AiDifficulty,
+    dismissable: Boolean,
+    onDismiss: () -> Unit,
+    onNewGame: (GameMode) -> Unit
+) {
     var showSettings by remember { mutableStateOf<((PieceColor, AiDifficulty) -> Unit)?>(null) }
 
     showSettings?.let { startGame ->
-        var selectedColor by remember { mutableStateOf(PieceColor.WHITE) }
-        var selectedDifficulty by remember { mutableStateOf(AiDifficulty.INTERMEDIATE) }
+        var selectedColor by remember { mutableStateOf(initialColor) }
+        var selectedDifficulty by remember { mutableStateOf(initialDifficulty) }
         AlertDialog(
             properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
             modifier = Modifier.fillMaxWidth(0.9f),
-            onDismissRequest = { showSettings = null },
+            onDismissRequest = {
+                showSettings = null
+                if (dismissable) onDismiss()
+            },
             title = { Text("Start New Game") },
             text = {
                 Column(
@@ -140,7 +176,7 @@ fun NewGameDialog(onNewGame: (GameMode) -> Unit) {
             confirmButton = { }
         )
     } ?: AlertDialog(
-        onDismissRequest = { },
+        onDismissRequest = { if (dismissable) onDismiss() },
         title = { Text(text = "New Game") },
         text = {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -157,7 +193,11 @@ fun NewGameDialog(onNewGame: (GameMode) -> Unit) {
                 }
             }
         },
-        confirmButton = {}
+        confirmButton = {
+            if (dismissable) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        }
     )
 }
 
@@ -169,16 +209,73 @@ fun ChessGame(
     onUndo: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val view = LocalView.current
     var showNewGameDialog by remember { mutableStateOf(false) }
+    var confirmNewGame by remember { mutableStateOf(false) }
+    var confirmResign by remember { mutableStateOf(false) }
     val promotionColor = uiState.promotionColor
+
+    BackHandler(enabled = uiState.selectedPiece != null) {
+        viewModel.onDeselect()
+    }
+
+    LaunchedEffect(uiState.moves.size, uiState.lastEvent, uiState.gameOver) {
+        val feedback = when (uiState.lastEvent) {
+            "capture" -> HapticFeedbackConstants.LONG_PRESS
+            "check", "mate", "resign" -> HapticFeedbackConstants.REJECT
+            "move" -> HapticFeedbackConstants.CLOCK_TICK
+            else -> return@LaunchedEffect
+        }
+        view.performHapticFeedback(feedback)
+    }
+
     if (uiState.promotionPending && promotionColor != null) {
         PawnPromotionDialog(promotionColor, onPromote = onPromote)
     }
+    if (confirmNewGame) {
+        AlertDialog(
+            onDismissRequest = { confirmNewGame = false },
+            title = { Text("Start a new game?") },
+            text = { Text("The current game will be replaced.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmNewGame = false
+                    showNewGameDialog = true
+                }) { Text("Continue") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmNewGame = false }) { Text("Cancel") }
+            }
+        )
+    }
+    if (confirmResign) {
+        AlertDialog(
+            onDismissRequest = { confirmResign = false },
+            title = { Text("Resign?") },
+            text = { Text("This will end the game.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmResign = false
+                    viewModel.onResign()
+                }) { Text("Resign") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmResign = false }) { Text("Cancel") }
+            }
+        )
+    }
     if (showNewGameDialog && uiState.gameStarted) {
-        NewGameDialog(onNewGame = {
-            viewModel.onNewGame(it)
-            showNewGameDialog = false
-        })
+        NewGameDialog(
+            initialColor = viewModel.lastAiColor(),
+            initialDifficulty = viewModel.lastAiDifficulty(),
+            dismissable = true,
+            onDismiss = { showNewGameDialog = false },
+            onNewGame = {
+                viewModel.onNewGame(it)
+                showNewGameDialog = false
+            }
+        )
     }
 
     val topCaptured = if (uiState.isBoardFlipped) uiState.capturedByWhite else uiState.capturedByBlack
@@ -188,19 +285,25 @@ fun ChessGame(
         uiState.gameOver -> uiState.gameStatus ?: "Game over"
         else -> "${uiState.turn.name.lowercase().replaceFirstChar { it.titlecase() }} to move"
     }
+    val materialLabel = when {
+        uiState.material > 0 -> "+${uiState.material}"
+        uiState.material < 0 -> "${uiState.material}"
+        else -> "even"
+    }
 
     Scaffold { innerPadding ->
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 12.dp),
-            Arrangement.Center,
-            Alignment.CenterHorizontally
+                .padding(horizontal = 12.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             CapturedPiecesRow(topCaptured)
             Spacer(modifier = Modifier.height(8.dp))
             Text(turnLabel, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
+            Text("Material $materialLabel", fontSize = 14.sp)
             Spacer(modifier = Modifier.height(8.dp))
             MovesList(moves = uiState.moves, turn = uiState.turn)
             Spacer(modifier = Modifier.height(8.dp))
@@ -211,12 +314,44 @@ fun ChessGame(
             Spacer(modifier = Modifier.height(8.dp))
             CapturedPiecesRow(bottomCaptured)
             Spacer(modifier = Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+            ) {
                 OutlinedButton(onClick = onUndo, enabled = uiState.canUndo && !uiState.isAiThinking) {
                     Text("Undo")
                 }
-                Button(onClick = { showNewGameDialog = true }) {
+                OutlinedButton(onClick = viewModel::onToggleFlip, enabled = uiState.gameStarted) {
+                    Text("Flip")
+                }
+                OutlinedButton(
+                    onClick = { confirmResign = true },
+                    enabled = uiState.gameStarted && !uiState.gameOver && !uiState.isAiThinking
+                ) {
+                    Text("Resign")
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+            ) {
+                Button(onClick = {
+                    val inProgress = uiState.gameStarted && !uiState.gameOver && uiState.moves.isNotEmpty()
+                    if (inProgress) confirmNewGame = true else showNewGameDialog = true
+                }) {
                     Text("New Game")
+                }
+                OutlinedButton(
+                    onClick = {
+                        val pgn = uiState.pgn.ifBlank { "1." }
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("PGN", pgn))
+                        Toast.makeText(context, "PGN copied", Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = uiState.gameStarted
+                ) {
+                    Text("Copy PGN")
                 }
             }
 
@@ -226,45 +361,44 @@ fun ChessGame(
                     Text(it, fontSize = 20.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                 }
             }
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
 @Composable
 fun MovesList(moves: List<String>, turn: PieceColor) {
-    val listState = rememberLazyListState()
     val rows = moves.chunked(2)
+    val scroll = rememberScrollState()
     LaunchedEffect(moves.size) {
-        val target = rows.size
-        if (target > 0) {
-            listState.animateScrollToItem(target)
-        }
+        scroll.animateScrollTo(scroll.maxValue)
     }
-    Box(Modifier.height(100.dp)) {
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth()
-                .border(2.dp, Color.Gray)
-        ) {
-            item {
-                Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
-                    Text("White", fontWeight = if (turn == PieceColor.WHITE) FontWeight.Bold else FontWeight.Normal)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .height(120.dp)
+            .border(2.dp, Color.Gray)
+            .verticalScroll(scroll)
+    ) {
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceEvenly) {
+            Text("White", fontWeight = if (turn == PieceColor.WHITE) FontWeight.Bold else FontWeight.Normal)
+            VerticalDivider(color = MaterialTheme.colorScheme.primary)
+            Text("Black", fontWeight = if (turn == PieceColor.BLACK) FontWeight.Bold else FontWeight.Normal)
+        }
+        rows.forEachIndexed { index, move ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${index + 1}.",
+                    Modifier.width(28.dp).padding(start = 4.dp),
+                    fontSize = 13.sp
+                )
+                Text(move[0], Modifier.weight(1f), textAlign = TextAlign.Center)
+                if (move.size == 2) {
                     VerticalDivider(color = MaterialTheme.colorScheme.primary)
-                    Text("Black", fontWeight = if (turn == PieceColor.BLACK) FontWeight.Bold else FontWeight.Normal)
-                }
-            }
-            itemsIndexed(rows) { _, move ->
-                Row(Modifier.fillMaxWidth()) {
-                    Text(move[0], Modifier.weight(1f), textAlign = TextAlign.Center)
-                    if (move.size == 2) {
-                        VerticalDivider(color = MaterialTheme.colorScheme.primary)
-                        Text(move[1], Modifier.weight(1f), textAlign = TextAlign.Center)
-                    } else {
-                        VerticalDivider()
-                        Text("", Modifier.weight(1f), textAlign = TextAlign.Center)
-                    }
+                    Text(move[1], Modifier.weight(1f), textAlign = TextAlign.Center)
+                } else {
+                    VerticalDivider()
+                    Text("", Modifier.weight(1f), textAlign = TextAlign.Center)
                 }
             }
         }

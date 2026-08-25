@@ -1,7 +1,9 @@
 package com.huttsmedia.chess
 
+import android.app.Application
+import android.content.Context
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -14,10 +16,15 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 class ChessViewModel(
+    application: Application,
     private val savedStateHandle: SavedStateHandle
-) : ViewModel() {
+) : AndroidViewModel(application) {
 
-    private val _uiState = MutableStateFlow(ChessUiState(gameStarted = savedStateHandle["gameStarted"] ?: false))
+    private val prefs = application.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private val _uiState = MutableStateFlow(
+        ChessUiState(gameStarted = savedStateHandle["gameStarted"] ?: prefs.getBoolean(KEY_STARTED, false))
+    )
     val uiState: StateFlow<ChessUiState> = _uiState.asStateFlow()
 
     private var gameGeneration = 0
@@ -25,20 +32,24 @@ class ChessViewModel(
 
     init {
         if (_uiState.value.gameStarted) {
-            val json = ChessNative.getState()
-            if (JSONObject(json).has("error")) {
-                savedStateHandle["gameStarted"] = false
-                _uiState.value = ChessUiState()
-            } else {
-                applyState(json, _uiState.value.gameMode, thinking = false)
-            }
+            restoreExistingGame()
         }
+    }
+
+    fun lastAiColor(): PieceColor =
+        if (prefs.getBoolean(KEY_PLAY_WHITE, true)) PieceColor.WHITE else PieceColor.BLACK
+
+    fun lastAiDifficulty(): AiDifficulty {
+        val stored = prefs.getInt(KEY_DIFFICULTY, 1)
+        return AiDifficulty.entries.find { it.nativeValue == stored } ?: AiDifficulty.INTERMEDIATE
     }
 
     fun onNewGame(gameMode: GameMode) {
         cancelAi()
         gameGeneration += 1
         savedStateHandle["gameStarted"] = true
+        prefs.edit().putBoolean(KEY_STARTED, true).apply()
+        rememberMode(gameMode)
         val vsAi = gameMode is GameMode.VsAI
         val playAsWhite = when (gameMode) {
             is GameMode.VsAI -> gameMode.playerColor == PieceColor.WHITE
@@ -74,6 +85,55 @@ class ChessViewModel(
         maybeRequestAi()
     }
 
+    fun onDeselect() {
+        if (!_uiState.value.gameStarted || _uiState.value.selectedPiece == null) return
+        applyState(ChessNative.deselect(), _uiState.value.gameMode, thinking = _uiState.value.isAiThinking)
+    }
+
+    fun onToggleFlip() {
+        if (!_uiState.value.gameStarted) return
+        applyState(ChessNative.toggleFlip(), _uiState.value.gameMode, thinking = _uiState.value.isAiThinking)
+    }
+
+    fun onResign() {
+        if (!_uiState.value.gameStarted || _uiState.value.gameOver || _uiState.value.isAiThinking) return
+        cancelAi()
+        applyState(ChessNative.resign(), _uiState.value.gameMode, thinking = false)
+    }
+
+    private fun storedMode(): GameMode {
+        val save = prefs.getString(KEY_SAVE, null) ?: return GameMode.TwoPlayer
+        return runCatching { parseSavedGameMode(save) }.getOrDefault(GameMode.TwoPlayer)
+    }
+
+    private fun restoreExistingGame() {
+        val mode = storedMode()
+        val native = ChessNative.getState()
+        if (!JSONObject(native).has("error")) {
+            applyState(native, mode, thinking = false)
+            maybeRequestAi()
+            return
+        }
+        val save = prefs.getString(KEY_SAVE, null)
+        if (save.isNullOrBlank()) {
+            clearStarted()
+            return
+        }
+        val restored = ChessNative.importSave(save)
+        if (JSONObject(restored).has("error")) {
+            clearStarted()
+            return
+        }
+        applyState(restored, parseSavedGameMode(save), thinking = false)
+        maybeRequestAi()
+    }
+
+    private fun clearStarted() {
+        savedStateHandle["gameStarted"] = false
+        prefs.edit().putBoolean(KEY_STARTED, false).apply()
+        _uiState.value = ChessUiState()
+    }
+
     private fun maybeRequestAi() {
         val state = _uiState.value
         val mode = state.gameMode as? GameMode.VsAI ?: return
@@ -97,7 +157,36 @@ class ChessViewModel(
     }
 
     private fun applyState(json: String, gameMode: GameMode, thinking: Boolean) {
-        val started = savedStateHandle["gameStarted"] ?: false
+        val started = savedStateHandle["gameStarted"] ?: prefs.getBoolean(KEY_STARTED, false)
         _uiState.value = parseChessState(json, gameMode, started, thinking)
+        persistSave()
+    }
+
+    private fun persistSave() {
+        if (!_uiState.value.gameStarted) return
+        val save = ChessNative.exportSave()
+        if (JSONObject(save).has("error")) return
+        prefs.edit()
+            .putString(KEY_SAVE, save)
+            .putBoolean(KEY_STARTED, true)
+            .apply()
+    }
+
+    private fun rememberMode(gameMode: GameMode) {
+        when (gameMode) {
+            is GameMode.VsAI -> prefs.edit()
+                .putBoolean(KEY_PLAY_WHITE, gameMode.playerColor == PieceColor.WHITE)
+                .putInt(KEY_DIFFICULTY, gameMode.difficulty.nativeValue)
+                .apply()
+            GameMode.TwoPlayer -> Unit
+        }
+    }
+
+    companion object {
+        private const val PREFS = "hutts_chess"
+        private const val KEY_SAVE = "save"
+        private const val KEY_STARTED = "started"
+        private const val KEY_PLAY_WHITE = "play_white"
+        private const val KEY_DIFFICULTY = "difficulty"
     }
 }

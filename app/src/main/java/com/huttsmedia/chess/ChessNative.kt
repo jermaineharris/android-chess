@@ -11,4 +11,9 @@ object ChessNative {
     external fun undo(): String
     external fun aiMove(): String
     external fun getState(): String
+    external fun deselect(): String
+    external fun toggleFlip(): String
+    external fun resign(): String
+    external fun exportSave(): String
+    external fun importSave(json: String): String
 }

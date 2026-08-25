@@ -49,6 +49,10 @@ pub struct UiState {
     pub is_board_flipped: bool,
     #[serde(rename = "kingInCheck")]
     pub king_in_check: bool,
+    pub pgn: String,
+    pub material: i32,
+    #[serde(rename = "lastEvent")]
+    pub last_event: String,
 }
 
 #[derive(Clone)]
@@ -59,6 +63,8 @@ struct Snapshot {
     moves: Vec<String>,
     last_move: Option<(Square, Square)>,
     position_hashes: Vec<u64>,
+    uci_moves: Vec<String>,
+    resigned: Option<Color>,
 }
 
 pub struct Game {
@@ -75,6 +81,9 @@ pub struct Game {
     last_move: Option<(Square, Square)>,
     position_hashes: Vec<u64>,
     undo_stack: Vec<Snapshot>,
+    uci_moves: Vec<String>,
+    resigned: Option<Color>,
+    last_event: String,
 }
 
 fn role_name(role: Role) -> &'static str {
@@ -172,6 +181,9 @@ impl Game {
             pending_promotion: None,
             last_move: None,
             undo_stack: Vec::new(),
+            uci_moves: Vec::new(),
+            resigned: None,
+            last_event: "none".to_string(),
         }
     }
 
@@ -190,6 +202,8 @@ impl Game {
             moves: self.moves.clone(),
             last_move: self.last_move,
             position_hashes: self.position_hashes.clone(),
+            uci_moves: self.uci_moves.clone(),
+            resigned: self.resigned,
         }
     }
 
@@ -202,6 +216,9 @@ impl Game {
         self.pending_promotion = None;
         self.last_move = snap.last_move;
         self.position_hashes = snap.position_hashes;
+        self.uci_moves = snap.uci_moves;
+        self.resigned = snap.resigned;
+        self.last_event = "none".to_string();
     }
 
     pub fn click(&mut self, row: u8, col: u8) {
@@ -312,6 +329,7 @@ impl Game {
 
     fn play_move(&mut self, m: Move) {
         self.undo_stack.push(self.snapshot());
+        let captured = m.capture().is_some();
         if let Some(role) = m.capture() {
             let captured_color = !self.pos.turn();
             let dto = piece_dto(role, captured_color);
@@ -323,11 +341,24 @@ impl Game {
         }
         let (from, to) = move_from_to(&m);
         let san = SanPlus::from_move(self.pos.clone(), &m).to_string();
+        let uci = m.to_uci(CastlingMode::Standard).to_string();
         self.pos.play_unchecked(&m);
         self.moves.push(san);
+        self.uci_moves.push(uci);
         self.selected = None;
         self.last_move = Some((from, to));
         self.position_hashes.push(hash_pos(&self.pos));
+        self.last_event = if self.pos.is_checkmate() {
+            "mate".to_string()
+        } else if self.is_game_over() {
+            "draw".to_string()
+        } else if self.pos.is_check() {
+            "check".to_string()
+        } else if captured {
+            "capture".to_string()
+        } else {
+            "move".to_string()
+        };
     }
 
     fn is_threefold(&self) -> bool {
@@ -342,7 +373,8 @@ impl Game {
     }
 
     pub fn is_game_over(&self) -> bool {
-        self.pos.is_checkmate()
+        self.resigned.is_some()
+            || self.pos.is_checkmate()
             || self.pos.is_stalemate()
             || self.pos.is_insufficient_material()
             || self.pos.halfmoves() >= 100
@@ -371,6 +403,10 @@ impl Game {
     }
 
     fn status_text(&self) -> Option<String> {
+        if let Some(loser) = self.resigned {
+            let winner = if loser == Color::White { "Black" } else { "White" };
+            return Some(format!("{winner} wins by resignation."));
+        }
         if self.pos.is_checkmate() {
             let winner = if self.pos.turn() == Color::White {
                 "Black"
@@ -428,7 +464,105 @@ impl Game {
                 .map(|_| color_name(self.pos.turn()).to_string()),
             is_board_flipped: self.flipped,
             king_in_check: self.pos.is_check() && !game_over,
+            pgn: self.pgn(),
+            material: self.material_score(),
+            last_event: self.last_event.clone(),
         }
+    }
+
+    fn material_score(&self) -> i32 {
+        let mut score = 0;
+        for sq in self.pos.board().occupied() {
+            let piece = self.pos.board().piece_at(sq).unwrap();
+            let v = match piece.role {
+                Role::Pawn => 1,
+                Role::Knight | Role::Bishop => 3,
+                Role::Rook => 5,
+                Role::Queen => 9,
+                Role::King => 0,
+            };
+            score += if piece.color == Color::White { v } else { -v };
+        }
+        if self.flipped { -score } else { score }
+    }
+
+    fn pgn(&self) -> String {
+        let mut out = String::from("[Event \"Hutts Chess\"]\n[Site \"Android\"]\n\n");
+        for (i, chunk) in self.moves.chunks(2).enumerate() {
+            out.push_str(&format!("{}. {}", i + 1, chunk[0]));
+            if chunk.len() == 2 {
+                out.push(' ');
+                out.push_str(&chunk[1]);
+            }
+            out.push(' ');
+        }
+        out.trim().to_string()
+    }
+
+    pub fn deselect(&mut self) {
+        self.selected = None;
+        self.last_event = "none".to_string();
+    }
+
+    pub fn toggle_flip(&mut self) {
+        self.flipped = !self.flipped;
+        self.last_event = "none".to_string();
+    }
+
+    pub fn resign(&mut self) {
+        if self.is_game_over() {
+            return;
+        }
+        let loser = if self.mode == GameMode::VsAi {
+            self.player_color
+        } else {
+            self.pos.turn()
+        };
+        self.undo_stack.push(self.snapshot());
+        self.resigned = Some(loser);
+        self.selected = None;
+        self.pending_promotion = None;
+        self.last_event = "resign".to_string();
+    }
+
+    pub fn export_save(&self) -> String {
+        serde_json::json!({
+            "vsAi": self.mode == GameMode::VsAi,
+            "playAsWhite": self.player_color == Color::White,
+            "difficulty": self.difficulty,
+            "flipped": self.flipped,
+            "uci": self.uci_moves,
+            "resigned": self.resigned.map(color_name),
+        })
+        .to_string()
+    }
+
+    pub fn import_save(json: &str) -> Result<Self, String> {
+        let v: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let vs_ai = v.get("vsAi").and_then(|x| x.as_bool()).unwrap_or(false);
+        let play_as_white = v.get("playAsWhite").and_then(|x| x.as_bool()).unwrap_or(true);
+        let difficulty = v.get("difficulty").and_then(|x| x.as_u64()).unwrap_or(1) as u8;
+        let mut game = Game::new(vs_ai, play_as_white, difficulty);
+        if let Some(flipped) = v.get("flipped").and_then(|x| x.as_bool()) {
+            game.flipped = flipped;
+        }
+        if let Some(arr) = v.get("uci").and_then(|x| x.as_array()) {
+            for uci in arr {
+                let Some(s) = uci.as_str() else { continue };
+                if !game.play_uci_for_tests(s) {
+                    return Err(format!("illegal uci {s}"));
+                }
+            }
+        }
+        if let Some(name) = v.get("resigned").and_then(|x| x.as_str()) {
+            game.resigned = match name {
+                "WHITE" => Some(Color::White),
+                "BLACK" => Some(Color::Black),
+                _ => None,
+            };
+        }
+        game.last_event = "none".to_string();
+        Ok(game)
     }
 
     pub fn to_json(&self) -> String {
@@ -585,5 +719,53 @@ mod tests {
         g.position_hashes = vec![hash_pos(&g.pos)];
         assert!(g.is_game_over());
         assert!(g.ui_state().game_status.unwrap().contains("50-move"));
+    }
+
+    #[test]
+    fn save_and_load_round_trip() {
+        let mut g = Game::new(true, false, 2);
+        assert!(g.play_uci_for_tests("e2e4"));
+        assert!(g.play_uci_for_tests("e7e5"));
+        let save = g.export_save();
+        let loaded = Game::import_save(&save).unwrap();
+        let state = loaded.ui_state();
+        assert_eq!(state.moves, vec!["e4", "e5"]);
+        assert_eq!(state.turn, "WHITE");
+        assert!(state.is_board_flipped);
+        assert!(state.pgn.contains("1. e4 e5"));
+        assert_eq!(state.material, 0);
+    }
+
+    #[test]
+    fn resign_ends_game() {
+        let mut g = Game::new(true, true, 1);
+        g.resign();
+        let state = g.ui_state();
+        assert!(state.game_over);
+        assert!(state.game_status.unwrap().contains("resignation"));
+        assert_eq!(state.last_event, "resign");
+    }
+
+    #[test]
+    fn toggle_flip_and_deselect() {
+        let mut g = Game::new(false, true, 1);
+        g.click(6, 4);
+        assert!(g.ui_state().selected.is_some());
+        g.deselect();
+        assert!(g.ui_state().selected.is_none());
+        assert!(!g.ui_state().is_board_flipped);
+        g.toggle_flip();
+        assert!(g.ui_state().is_board_flipped);
+        assert_eq!(g.ui_state().last_event, "none");
+    }
+
+    #[test]
+    fn capture_sets_last_event() {
+        let mut g = Game::new(false, true, 1);
+        assert!(g.play_uci_for_tests("e2e4"));
+        assert!(g.play_uci_for_tests("d7d5"));
+        assert!(g.play_uci_for_tests("e4d5"));
+        assert_eq!(g.ui_state().last_event, "capture");
+        assert_eq!(g.ui_state().material, 1);
     }
 }
